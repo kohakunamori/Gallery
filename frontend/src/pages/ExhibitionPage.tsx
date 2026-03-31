@@ -33,28 +33,6 @@ export function ExhibitionPage() {
   }, []);
 
   useEffect(() => {
-    const banner = document.querySelector<HTMLElement>('[role="banner"]');
-
-    if (!banner) {
-      return;
-    }
-
-    const syncBannerVisibility = () => {
-      const atTop = window.scrollY === 0;
-      banner.classList.toggle('opacity-100', atTop);
-      banner.classList.toggle('opacity-0', !atTop);
-      banner.classList.toggle('pointer-events-none', !atTop);
-    };
-
-    syncBannerVisibility();
-    window.addEventListener('scroll', syncBannerVisibility, { passive: true });
-
-    return () => {
-      window.removeEventListener('scroll', syncBannerVisibility);
-    };
-  }, []);
-
-  useEffect(() => {
     let cancelled = false;
 
     fetchPhotos()

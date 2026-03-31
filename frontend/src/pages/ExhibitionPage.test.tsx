@@ -99,23 +99,37 @@ describe('ExhibitionPage', () => {
     expect(banner).not.toHaveClass('opacity-0');
   });
 
-  it('hides the Gallery header after leaving the top of the page', async () => {
+  it('toggles the Gallery header visibility as the page leaves and returns to the top', async () => {
     mockedFetchPhotos.mockResolvedValue(photos);
 
     render(<ExhibitionPage />);
 
     const banner = await screen.findByRole('banner');
 
-    Object.defineProperty(window, 'scrollY', {
-      writable: true,
-      configurable: true,
-      value: 32,
-    });
+    act(() => {
+      Object.defineProperty(window, 'scrollY', {
+        writable: true,
+        configurable: true,
+        value: 32,
+      });
 
-    window.dispatchEvent(new Event('scroll'));
+      window.dispatchEvent(new Event('scroll'));
+    });
 
     expect(banner).toHaveClass('opacity-0');
     expect(banner).toHaveClass('pointer-events-none');
+
+    act(() => {
+      Object.defineProperty(window, 'scrollY', {
+        writable: true,
+        configurable: true,
+        value: 0,
+      });
+
+      window.dispatchEvent(new Event('scroll'));
+    });
+
+    expect(banner).not.toHaveClass('opacity-0');
   });
 
   it('opens the in-page viewer when a photo tile is clicked', async () => {
