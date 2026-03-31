@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { flushSync } from 'react-dom';
 import type { Photo } from '../../types/photo';
 
 type WaterfallCardProps = {
@@ -23,9 +22,7 @@ export function WaterfallCard({ photo, onOpen }: WaterfallCardProps) {
 
     const observer = new IntersectionObserver(
       ([entry]) => {
-        flushSync(() => {
-          setIsNearViewport(entry?.isIntersecting ?? false);
-        });
+        setIsNearViewport(entry?.isIntersecting ?? false);
       },
       { rootMargin: '1200px 0px' },
     );
