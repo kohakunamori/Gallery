@@ -11,7 +11,7 @@ export function WaterfallCard({ photo, onOpen }: WaterfallCardProps) {
       type="button"
       aria-label={`Open ${photo.filename}`}
       onClick={() => onOpen(photo.id)}
-      className="group mb-2 block w-full overflow-hidden rounded-xl bg-surface-container-low text-left [break-inside:avoid]"
+      className="group mb-2 block w-full overflow-hidden rounded-xl bg-surface-container-low text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 [break-inside:avoid]"
     >
       <div className="relative overflow-hidden">
         <img
