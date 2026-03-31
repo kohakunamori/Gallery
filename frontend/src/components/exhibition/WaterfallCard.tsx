@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { Photo } from '../../types/photo';
 
 type WaterfallCardProps = {
@@ -8,6 +8,11 @@ type WaterfallCardProps = {
 
 export function WaterfallCard({ photo, onOpen }: WaterfallCardProps) {
   const [isLoaded, setIsLoaded] = useState(false);
+
+  useEffect(() => {
+    setIsLoaded(false);
+  }, [photo.thumbnailUrl]);
+
   const aspectRatio = useMemo(() => {
     if (photo.width !== null && photo.height !== null && photo.width > 0 && photo.height > 0) {
       return `${photo.width} / ${photo.height}`;

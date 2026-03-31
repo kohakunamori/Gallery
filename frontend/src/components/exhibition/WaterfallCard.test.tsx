@@ -31,4 +31,29 @@ describe('WaterfallCard', () => {
 
     expect(image).toHaveClass('opacity-100');
   });
+
+  it('resets the loaded state when the thumbnail source changes', () => {
+    const { rerender } = render(<WaterfallCard photo={photo} onOpen={vi.fn()} />);
+
+    const firstImage = screen.getByRole('img', { name: 'one.jpg' });
+
+    fireEvent.load(firstImage);
+
+    expect(firstImage).toHaveClass('opacity-100');
+
+    rerender(
+      <WaterfallCard
+        photo={{
+          ...photo,
+          id: 'two',
+          filename: 'two.jpg',
+          url: '/media/two.jpg',
+          thumbnailUrl: '/media/two.jpg',
+        }}
+        onOpen={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('img', { name: 'two.jpg' })).toHaveClass('opacity-0');
+  });
 });
