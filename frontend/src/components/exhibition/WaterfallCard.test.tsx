@@ -73,7 +73,7 @@ describe('WaterfallCard', () => {
     expect(image).toHaveClass('opacity-100');
   });
 
-  it('resets the loaded state when the thumbnail source changes', () => {
+  it('keeps a visible thumbnail swap hidden until the new image loads', () => {
     const { rerender } = render(<WaterfallCard photo={photo} onOpen={vi.fn()} />);
 
     act(() => {
@@ -99,7 +99,9 @@ describe('WaterfallCard', () => {
       />,
     );
 
-    expect(screen.getByRole('img', { name: 'two.jpg' })).toHaveClass('opacity-0');
+    const secondImage = screen.getByRole('img', { name: 'two.jpg' });
+
+    expect(secondImage).toHaveClass('opacity-0');
   });
 
   it('unloads the image when it is far outside the viewport and restores it when it comes back', () => {

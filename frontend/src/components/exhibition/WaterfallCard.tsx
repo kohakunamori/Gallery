@@ -7,13 +7,10 @@ type WaterfallCardProps = {
 };
 
 export function WaterfallCard({ photo, onOpen }: WaterfallCardProps) {
-  const [isLoaded, setIsLoaded] = useState(false);
+  const [loadedThumbnailUrl, setLoadedThumbnailUrl] = useState<string | null>(null);
   const cardRef = useRef<HTMLDivElement | null>(null);
   const [isNearViewport, setIsNearViewport] = useState(false);
-
-  useEffect(() => {
-    setIsLoaded(false);
-  }, [photo.thumbnailUrl]);
+  const isLoaded = loadedThumbnailUrl === photo.thumbnailUrl;
 
   useEffect(() => {
     if (cardRef.current === null) {
@@ -53,7 +50,7 @@ export function WaterfallCard({ photo, onOpen }: WaterfallCardProps) {
             src={photo.thumbnailUrl}
             alt={photo.filename}
             loading="lazy"
-            onLoad={() => setIsLoaded(true)}
+            onLoad={() => setLoadedThumbnailUrl(photo.thumbnailUrl)}
             className={`block h-full w-full object-cover transition-all duration-500 ${
               isLoaded ? 'opacity-100 group-hover:scale-[1.03]' : 'opacity-0'
             }`}
