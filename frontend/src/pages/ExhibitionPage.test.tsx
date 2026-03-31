@@ -15,6 +15,28 @@ vi.mock('../utils/photoQuery', () => ({
 
 const mockedFetchPhotos = vi.mocked(fetchPhotos);
 
+class MockIntersectionObserver {
+  static instances: MockIntersectionObserver[] = [];
+
+  callback: IntersectionObserverCallback;
+
+  constructor(callback: IntersectionObserverCallback) {
+    this.callback = callback;
+    MockIntersectionObserver.instances.push(this);
+  }
+
+  observe() {}
+  disconnect() {}
+  unobserve() {}
+
+  trigger(isIntersecting = true) {
+    this.callback(
+      [{ isIntersecting } as IntersectionObserverEntry],
+      this as unknown as IntersectionObserver,
+    );
+  }
+}
+
 const photos = [
   {
     id: 'late-afternoon',
@@ -51,6 +73,8 @@ const photos = [
 describe('ExhibitionPage', () => {
   beforeEach(() => {
     mockedFetchPhotos.mockReset();
+    MockIntersectionObserver.instances = [];
+    vi.stubGlobal('IntersectionObserver', MockIntersectionObserver);
   });
 
   it('renders the exhibition header, hero, month sections, and photo tiles', async () => {
@@ -90,5 +114,31 @@ describe('ExhibitionPage', () => {
     render(<ExhibitionPage />);
 
     expect(await screen.findByText('Unable to load the exhibition right now.')).toBeInTheDocument();
+  });
+
+  it('reveals more photos when the load trigger enters the viewport', async () => {
+    const manyPhotos = Array.from({ length: 20 }, (_, index) => ({
+      id: `photo-${index}`,
+      filename: `photo-${index}.jpg`,
+      url: `/media/photo-${index}.jpg`,
+      thumbnailUrl: `/media/photo-${index}.jpg`,
+      takenAt: '2026-03-31T09:00:00Z',
+      sortTime: `2026-03-${String(31 - index).padStart(2, '0')}T09:00:00Z`,
+      width: 1200,
+      height: 800,
+    }));
+
+    mockedFetchPhotos.mockResolvedValue(manyPhotos);
+
+    render(<ExhibitionPage />);
+
+    await screen.findByRole('button', { name: 'Open photo-0.jpg' });
+
+    expect(screen.queryByRole('button', { name: 'Open photo-19.jpg' })).not.toBeInTheDocument();
+
+    MockIntersectionObserver.instances[0]?.trigger(true);
+
+    expect(await screen.findByRole('button', { name: 'Open photo-19.jpg' })).toBeInTheDocument();
+    expect(screen.getByText('End of exhibition')).toBeInTheDocument();
   });
 });

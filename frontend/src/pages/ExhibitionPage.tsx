@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { ExhibitionHeader } from '../components/exhibition/ExhibitionHeader';
 import { ExhibitionHero } from '../components/exhibition/ExhibitionHero';
 import { ExhibitionSection } from '../components/exhibition/ExhibitionSection';
+import { LoadTrigger } from '../components/exhibition/LoadTrigger';
 import { PhotoViewerModal } from '../components/viewer/PhotoViewerModal';
 import { fetchPhotos } from '../services/photos';
 import type { Photo } from '../types/photo';
@@ -9,6 +10,7 @@ import { readSelectedPhotoId, writeSelectedPhotoId } from '../utils/photoQuery';
 import { groupPhotosByMonth } from '../utils/groupPhotosByMonth';
 
 const INITIAL_VISIBLE_COUNT = 18;
+const LOAD_MORE_COUNT = 12;
 
 export function ExhibitionPage() {
   const [photos, setPhotos] = useState<Photo[]>([]);
@@ -47,6 +49,15 @@ export function ExhibitionPage() {
   const groups = useMemo(() => groupPhotosByMonth(visiblePhotos), [visiblePhotos]);
   const selectedIndex = photos.findIndex((photo) => photo.id === selectedPhotoId);
 
+  const hasMorePhotos = visibleCount < photos.length;
+
+  const loadMore = () => {
+    if (!hasMorePhotos) {
+      return;
+    }
+    setVisibleCount((current) => Math.min(current + LOAD_MORE_COUNT, photos.length));
+  };
+
   const openPhoto = (photoId: string) => {
     setSelectedPhotoId(photoId);
     writeSelectedPhotoId(photoId);
@@ -83,6 +94,7 @@ export function ExhibitionPage() {
               {groups.map((group) => (
                 <ExhibitionSection key={group.title} title={group.title} photos={group.photos} onOpen={openPhoto} />
               ))}
+              <LoadTrigger disabled={false} isComplete={!hasMorePhotos} onLoadMore={loadMore} />
             </div>
           )}
         </section>
