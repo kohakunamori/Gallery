@@ -11,7 +11,7 @@ type ViewerTopBarProps = {
 
 export function ViewerTopBar({ photo, currentIndex, total, onClose, closeButtonRef }: ViewerTopBarProps) {
   return (
-    <header className="pointer-events-auto flex items-start justify-between gap-4 rounded-[28px] border border-white/10 bg-black/45 px-5 py-4 text-white shadow-2xl backdrop-blur-xl">
+    <header className="pointer-events-auto flex items-start justify-between gap-4 rounded-[32px] border border-white/8 bg-black/40 px-6 py-4 text-white shadow-2xl backdrop-blur-xl">
       <div className="min-w-0">
         <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-white/55">Photo viewer</p>
         <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">

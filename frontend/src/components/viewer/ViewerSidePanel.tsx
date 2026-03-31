@@ -34,7 +34,7 @@ function formatTakenAt(value: string | null) {
 
 export function ViewerSidePanel({ photo }: ViewerSidePanelProps) {
   return (
-    <aside className="pointer-events-auto flex h-full w-full max-w-sm flex-col rounded-[32px] border border-white/10 bg-black/55 p-6 text-white shadow-2xl backdrop-blur-xl">
+    <aside className="pointer-events-auto flex h-full w-full max-w-sm flex-col rounded-[32px] border border-white/8 bg-black/50 p-6 text-white shadow-2xl backdrop-blur-xl">
       <h2 className="text-lg font-semibold">Info</h2>
       <div className="mt-6 space-y-5 text-sm">
         <div>

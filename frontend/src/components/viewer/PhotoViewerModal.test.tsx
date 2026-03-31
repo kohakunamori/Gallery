@@ -27,7 +27,7 @@ const photos = [
 ];
 
 describe('PhotoViewerModal', () => {
-  it('renders an immersive viewer overlay with chrome, metadata, navigation, and disabled placeholder controls', async () => {
+  it('renders an immersive viewer overlay with chrome, metadata, navigation, and active viewer controls', async () => {
     const user = userEvent.setup();
     const onSelectIndex = vi.fn();
     const onClose = vi.fn();
@@ -52,8 +52,9 @@ describe('PhotoViewerModal', () => {
     expect(within(viewer).getByText('1200 × 800')).toBeInTheDocument();
     expect(within(viewer).getByRole('button', { name: 'Bookmark photo' })).toBeDisabled();
     expect(within(viewer).getByRole('button', { name: 'Share photo' })).toBeDisabled();
-    expect(within(viewer).getByRole('button', { name: 'Zoom in' })).toBeDisabled();
-    expect(within(viewer).getByRole('button', { name: 'Toggle details' })).toBeDisabled();
+    expect(within(viewer).getByRole('button', { name: 'Zoom in' })).toBeEnabled();
+    expect(within(viewer).getByRole('button', { name: 'Zoom out' })).toBeDisabled();
+    expect(within(viewer).getByRole('button', { name: 'Hide details' })).toBeEnabled();
     expect(within(viewer).getByRole('button', { name: 'Previous photo' })).toBeDisabled();
     expect(within(viewer).getByRole('img', { name: 'one.jpg' })).toBeInTheDocument();
 
@@ -62,6 +63,23 @@ describe('PhotoViewerModal', () => {
 
     await user.click(closeButton);
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders exhibition viewer chrome with zoom status and details toggle copy', () => {
+    render(
+      <PhotoViewerModal
+        photos={photos}
+        selectedIndex={0}
+        onSelectIndex={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const viewer = screen.getByRole('dialog', { name: 'Photo viewer' });
+
+    expect(within(viewer).getByText('100%')).toBeInTheDocument();
+    expect(within(viewer).getByRole('button', { name: 'Hide details' })).toBeInTheDocument();
+    expect(within(viewer).getByText('Photo viewer')).toBeInTheDocument();
   });
 
   it('closes the viewer when Escape is pressed', async () => {
