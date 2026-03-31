@@ -82,7 +82,7 @@ describe('ExhibitionPage', () => {
 
     render(<ExhibitionPage />);
 
-    expect(await screen.findByRole('banner')).toHaveTextContent('The Curator');
+    expect(await screen.findByRole('banner')).toHaveTextContent('Gallery');
     expect(screen.getByRole('heading', { name: 'A curated wall of AIGC imagery.' })).toBeInTheDocument();
     expect(screen.getByText('March 2026')).toBeInTheDocument();
     expect(screen.getByText('February 2026')).toBeInTheDocument();
@@ -141,7 +141,6 @@ describe('ExhibitionPage', () => {
     });
 
     expect(await screen.findByRole('button', { name: 'Open photo-19.jpg' })).toBeInTheDocument();
-    expect(screen.getByText('End of exhibition')).toBeInTheDocument();
   });
 
   it('loads one batch per visibility entry and requires leaving before loading again', async () => {
@@ -184,6 +183,5 @@ describe('ExhibitionPage', () => {
     });
 
     expect(await screen.findByRole('button', { name: 'Open photo-39.jpg' })).toBeInTheDocument();
-    expect(screen.getByText('End of exhibition')).toBeInTheDocument();
   });
 });

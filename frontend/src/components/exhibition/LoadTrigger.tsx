@@ -41,7 +41,7 @@ export function LoadTrigger({ disabled, isComplete, onLoadMore }: LoadTriggerPro
   }, [disabled, isComplete, onLoadMore]);
 
   if (isComplete) {
-    return <p className="pt-10 text-center text-xs font-medium uppercase tracking-[0.22em] text-outline">End of exhibition</p>;
+    return null;
   }
 
   return (
