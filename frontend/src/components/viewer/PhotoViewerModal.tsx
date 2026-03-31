@@ -237,7 +237,7 @@ export function PhotoViewerModal({ photos, selectedIndex, onSelectIndex, onClose
                 alt={photo.filename}
                 className="max-h-full max-w-full object-contain drop-shadow-[0_30px_80px_rgba(0,0,0,0.45)] transition-transform duration-200"
                 style={{
-                  transform: `scale(${zoomLevel / 100}) translate(${panOffset.x}px, ${panOffset.y}px)`,
+                  transform: `translate(${panOffset.x}px, ${panOffset.y}px) scale(${zoomLevel / 100})`,
                   transformOrigin: 'center center',
                 }}
               />
