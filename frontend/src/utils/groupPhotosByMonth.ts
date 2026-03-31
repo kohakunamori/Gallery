@@ -1,11 +1,6 @@
 import type { Photo } from '../types/photo';
 
-export type PhotoMonthGroup = {
-  title: string;
-  photos: Photo[];
-};
-
-export function groupPhotosByMonth(photos: Photo[]): PhotoMonthGroup[] {
+export function groupPhotosByMonth(photos: Photo[]): { title: string; photos: Photo[] }[] {
   const formatter = new Intl.DateTimeFormat('en-US', {
     month: 'long',
     year: 'numeric',
