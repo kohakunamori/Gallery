@@ -9,7 +9,7 @@ type WaterfallCardProps = {
 export function WaterfallCard({ photo, onOpen }: WaterfallCardProps) {
   const [isLoaded, setIsLoaded] = useState(false);
   const cardRef = useRef<HTMLDivElement | null>(null);
-  const [isNearViewport, setIsNearViewport] = useState(true);
+  const [isNearViewport, setIsNearViewport] = useState(false);
 
   useEffect(() => {
     setIsLoaded(false);

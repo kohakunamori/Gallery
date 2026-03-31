@@ -45,8 +45,24 @@ describe('WaterfallCard', () => {
     expect(screen.getByTestId('waterfall-card-frame')).toHaveStyle({ aspectRatio: '1200 / 800' });
   });
 
+  it('does not mount the image until the observer reports the card is visible', () => {
+    render(<WaterfallCard photo={photo} onOpen={vi.fn()} />);
+
+    expect(screen.queryByRole('img', { name: 'one.jpg' })).not.toBeInTheDocument();
+
+    act(() => {
+      MockIntersectionObserver.instances[0]?.trigger(true);
+    });
+
+    expect(screen.getByRole('img', { name: 'one.jpg' })).toBeInTheDocument();
+  });
+
   it('reveals the image after the image load event fires', () => {
     render(<WaterfallCard photo={photo} onOpen={vi.fn()} />);
+
+    act(() => {
+      MockIntersectionObserver.instances[0]?.trigger(true);
+    });
 
     const image = screen.getByRole('img', { name: 'one.jpg' });
 
@@ -59,6 +75,10 @@ describe('WaterfallCard', () => {
 
   it('resets the loaded state when the thumbnail source changes', () => {
     const { rerender } = render(<WaterfallCard photo={photo} onOpen={vi.fn()} />);
+
+    act(() => {
+      MockIntersectionObserver.instances[0]?.trigger(true);
+    });
 
     const firstImage = screen.getByRole('img', { name: 'one.jpg' });
 
@@ -84,6 +104,10 @@ describe('WaterfallCard', () => {
 
   it('unloads the image when it is far outside the viewport and restores it when it comes back', () => {
     render(<WaterfallCard photo={photo} onOpen={vi.fn()} />);
+
+    act(() => {
+      MockIntersectionObserver.instances[0]?.trigger(true);
+    });
 
     expect(screen.getByRole('img', { name: 'one.jpg' })).toBeInTheDocument();
 
