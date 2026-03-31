@@ -27,6 +27,11 @@ const photos = [
 ];
 
 describe('PhotoViewerModal', () => {
+  const getPanSurface = (viewer: HTMLElement) => {
+    const image = within(viewer).getByRole('img', { name: 'one.jpg' });
+    return image.parentElement as HTMLDivElement;
+  };
+
   it('renders an immersive viewer overlay with chrome, metadata, navigation, and active viewer controls', async () => {
     const user = userEvent.setup();
     const onSelectIndex = vi.fn();
@@ -232,6 +237,75 @@ describe('PhotoViewerModal', () => {
 
     detailsToggleButton.focus();
     expect(detailsToggleButton).toHaveFocus();
+
+    await user.keyboard('{Tab}');
+
+    expect(closeButton).toHaveFocus();
+  });
+
+  it('keeps ArrowRight navigation working after interacting with the image surface', async () => {
+    const user = userEvent.setup();
+    const onSelectIndex = vi.fn();
+
+    render(
+      <PhotoViewerModal
+        photos={photos}
+        selectedIndex={0}
+        onSelectIndex={onSelectIndex}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const viewer = screen.getByRole('dialog', { name: 'Photo viewer' });
+
+    fireEvent.mouseDown(getPanSurface(viewer));
+    expect(viewer).toHaveFocus();
+
+    await user.keyboard('{ArrowRight}');
+
+    expect(onSelectIndex).toHaveBeenCalledWith(1);
+  });
+
+  it('keeps Escape close working after interacting with the image surface', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+
+    render(
+      <PhotoViewerModal
+        photos={photos}
+        selectedIndex={0}
+        onSelectIndex={vi.fn()}
+        onClose={onClose}
+      />,
+    );
+
+    const viewer = screen.getByRole('dialog', { name: 'Photo viewer' });
+
+    fireEvent.mouseDown(getPanSurface(viewer));
+    expect(viewer).toHaveFocus();
+
+    await user.keyboard('{Escape}');
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('moves Tab focus into the modal loop after interacting with the image surface', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <PhotoViewerModal
+        photos={photos}
+        selectedIndex={0}
+        onSelectIndex={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const viewer = screen.getByRole('dialog', { name: 'Photo viewer' });
+    const closeButton = within(viewer).getByRole('button', { name: 'Close viewer' });
+
+    fireEvent.mouseDown(getPanSurface(viewer));
+    expect(viewer).toHaveFocus();
 
     await user.keyboard('{Tab}');
 

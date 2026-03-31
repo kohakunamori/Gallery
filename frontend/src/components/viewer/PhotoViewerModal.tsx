@@ -140,6 +140,8 @@ export function PhotoViewerModal({ photos, selectedIndex, onSelectIndex, onClose
   };
 
   const handleMouseDown = (event: ReactMouseEvent<HTMLDivElement>) => {
+    dialogRef.current?.focus({ preventScroll: true });
+
     if (zoomLevel <= 100) {
       return;
     }
@@ -174,14 +176,22 @@ export function PhotoViewerModal({ photos, selectedIndex, onSelectIndex, onClose
       if (focusableElements.length > 0) {
         const firstFocusableElement = focusableElements[0];
         const lastFocusableElement = focusableElements[focusableElements.length - 1];
+        const activeElement = document.activeElement;
+        const isDialogRootFocused = activeElement === dialogRef.current;
 
-        if (event.shiftKey && document.activeElement === firstFocusableElement) {
+        if (!event.shiftKey && isDialogRootFocused) {
+          event.preventDefault();
+          firstFocusableElement.focus();
+          return;
+        }
+
+        if (event.shiftKey && (activeElement === firstFocusableElement || isDialogRootFocused)) {
           event.preventDefault();
           lastFocusableElement.focus();
           return;
         }
 
-        if (!event.shiftKey && document.activeElement === lastFocusableElement) {
+        if (!event.shiftKey && activeElement === lastFocusableElement) {
           event.preventDefault();
           firstFocusableElement.focus();
           return;
@@ -218,6 +228,7 @@ export function PhotoViewerModal({ photos, selectedIndex, onSelectIndex, onClose
       role="dialog"
       aria-modal="true"
       aria-label="Photo viewer"
+      tabIndex={-1}
       onKeyDown={handleKeyDown}
     >
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.08),transparent_38%),linear-gradient(180deg,rgba(0,0,0,0.72),rgba(0,0,0,0.94))]" />
