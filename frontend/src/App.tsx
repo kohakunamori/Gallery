@@ -1,5 +1,5 @@
-import { AppRouter } from './AppRouter';
+import { ExhibitionPage } from './pages/ExhibitionPage';
 
 export default function App() {
-  return <AppRouter />;
+  return <ExhibitionPage />;
 }
