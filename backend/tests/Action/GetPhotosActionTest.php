@@ -24,4 +24,25 @@ final class GetPhotosActionTest extends TestCase
             json_decode((string) $response->getBody(), true, 512, JSON_THROW_ON_ERROR),
         );
     }
+
+    public function testReturnsConfiguredMediaBaseUrl(): void
+    {
+        $photosDir = dirname(__DIR__, 3) . '/storage/photos';
+        $cacheDir = dirname(__DIR__, 2) . '/var/cache/test-configured-media';
+        @mkdir($cacheDir, 0777, true);
+
+        $app = createApp(
+            $photosDir,
+            'https://img.example.com',
+            new \Gallery\Service\FilePhotoCache($cacheDir),
+            true,
+        );
+
+        $request = (new \Slim\Psr7\Factory\ServerRequestFactory())->createServerRequest('GET', '/api/photos');
+        $response = $app->handle($request);
+        $payload = json_decode((string) $response->getBody(), true, 512, JSON_THROW_ON_ERROR);
+
+        self::assertStringStartsWith('https://img.example.com/', $payload['items'][0]['url']);
+        self::assertStringStartsWith('https://img.example.com/', $payload['items'][0]['thumbnailUrl']);
+    }
 }
