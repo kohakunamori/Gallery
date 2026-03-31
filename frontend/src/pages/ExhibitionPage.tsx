@@ -83,7 +83,7 @@ export function ExhibitionPage() {
     <>
       <ExhibitionHeader />
       <main className="min-h-screen bg-surface text-on-surface">
-        <ExhibitionHero totalCount={photos.length} />
+        <ExhibitionHero />
 
         <section className="mx-auto max-w-[2400px] px-4 pb-24 md:px-6 lg:px-12">
           {status === 'loading' && <p className="text-sm text-on-surface-variant">Loading exhibition…</p>}

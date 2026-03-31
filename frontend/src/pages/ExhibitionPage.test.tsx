@@ -83,7 +83,7 @@ describe('ExhibitionPage', () => {
     render(<ExhibitionPage />);
 
     expect(await screen.findByRole('banner')).toHaveTextContent('Gallery');
-    expect(screen.getByRole('heading', { name: 'A curated wall of AIGC imagery.' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'A curated wall of AIGC imagery.' })).not.toBeInTheDocument();
     expect(screen.getByText('March 2026')).toBeInTheDocument();
     expect(screen.getByText('February 2026')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Open late-afternoon.jpg' })).toBeInTheDocument();
