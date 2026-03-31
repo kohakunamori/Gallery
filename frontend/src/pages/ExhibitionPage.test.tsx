@@ -180,7 +180,7 @@ describe('ExhibitionPage', () => {
     expect(screen.queryByRole('button', { name: 'Open photo-19.jpg' })).not.toBeInTheDocument();
 
     act(() => {
-      MockIntersectionObserver.instances[0]?.trigger(true);
+      MockIntersectionObserver.instances.at(-1)?.trigger(true);
     });
 
     expect(await screen.findByRole('button', { name: 'Open photo-19.jpg' })).toBeInTheDocument();
