@@ -1,0 +1,20 @@
+import type { Photo } from '../../types/photo';
+import { WaterfallGallery } from './WaterfallGallery';
+
+type ExhibitionSectionProps = {
+  title: string;
+  photos: Photo[];
+  onOpen: (photoId: string) => void;
+};
+
+export function ExhibitionSection({ title, photos, onOpen }: ExhibitionSectionProps) {
+  return (
+    <section className="mb-16">
+      <div className="mb-6 flex items-center gap-4">
+        <h2 className="font-headline text-[11px] font-semibold uppercase tracking-[0.2em] text-outline">{title}</h2>
+        <div className="h-px flex-1 bg-surface-container-high" aria-hidden="true" />
+      </div>
+      <WaterfallGallery photos={photos} onOpen={onOpen} />
+    </section>
+  );
+}
