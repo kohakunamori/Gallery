@@ -1,0 +1,29 @@
+{
+  "name": "gallery/backend",
+  "type": "project",
+  "require": {
+    "php": "^8.2",
+    "slim/slim": "^4.14",
+    "slim/psr7": "^1.7"
+  },
+  "require-dev": {
+    "phpunit/phpunit": "^11.5"
+  },
+  "autoload": {
+    "psr-4": {
+      "Gallery\\": "src/"
+    },
+    "files": [
+      "src/createApp.php"
+    ]
+  },
+  "autoload-dev": {
+    "psr-4": {
+      "Gallery\\Tests\\": "tests/"
+    }
+  },
+  "scripts": {
+    "serve": "php -S 127.0.0.1:8080 -t public",
+    "test": "phpunit"
+  }
+}

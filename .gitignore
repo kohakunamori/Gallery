@@ -1,0 +1,9 @@
+.claude/
+backend/vendor/
+backend/var/cache/
+backend/.phpunit.cache/
+frontend/node_modules/
+frontend/dist/
+phpenv/
+stitch_exports/
+*.zip
