@@ -1,5 +1,5 @@
-import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WaterfallCard } from './WaterfallCard';
 
 const photo = {
@@ -12,6 +12,31 @@ const photo = {
   width: 1200,
   height: 800,
 };
+
+class MockIntersectionObserver {
+  static instances: MockIntersectionObserver[] = [];
+
+  constructor(public callback: IntersectionObserverCallback) {
+    MockIntersectionObserver.instances.push(this);
+  }
+
+  observe() {}
+  disconnect() {}
+  unobserve() {}
+
+  trigger(isIntersecting: boolean) {
+    this.callback([{ isIntersecting } as IntersectionObserverEntry], this as unknown as IntersectionObserver);
+  }
+}
+
+beforeEach(() => {
+  MockIntersectionObserver.instances = [];
+  vi.stubGlobal('IntersectionObserver', MockIntersectionObserver);
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe('WaterfallCard', () => {
   it('reserves layout using the photo aspect ratio before the image loads', () => {
@@ -56,4 +81,26 @@ describe('WaterfallCard', () => {
 
     expect(screen.getByRole('img', { name: 'two.jpg' })).toHaveClass('opacity-0');
   });
+});
+
+const originalTrigger = MockIntersectionObserver.prototype.trigger;
+
+MockIntersectionObserver.prototype.trigger = function (this: MockIntersectionObserver, isIntersecting: boolean) {
+  act(() => {
+    originalTrigger.call(this, isIntersecting);
+  });
+};
+
+it('unloads the image when it is far outside the viewport and restores it when it comes back', () => {
+  vi.stubGlobal('IntersectionObserver', MockIntersectionObserver);
+
+  render(<WaterfallCard photo={photo} onOpen={vi.fn()} />);
+
+  expect(screen.getByRole('img', { name: 'one.jpg' })).toBeInTheDocument();
+
+  MockIntersectionObserver.instances[0]?.trigger(false);
+  expect(screen.queryByRole('img', { name: 'one.jpg' })).not.toBeInTheDocument();
+
+  MockIntersectionObserver.instances[0]?.trigger(true);
+  expect(screen.getByRole('img', { name: 'one.jpg' })).toBeInTheDocument();
 });
