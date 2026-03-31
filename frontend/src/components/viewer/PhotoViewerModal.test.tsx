@@ -27,12 +27,7 @@ const photos = [
 ];
 
 describe('PhotoViewerModal', () => {
-  const getPanSurface = (viewer: HTMLElement) => {
-    const image = within(viewer).getByRole('img', { name: 'one.jpg' });
-    return image.parentElement as HTMLDivElement;
-  };
-
-  it('renders an immersive viewer overlay with chrome, metadata, navigation, and active viewer controls', async () => {
+  it('renders a minimal lightbox with image, page count, and basic navigation', async () => {
     const user = userEvent.setup();
     const onSelectIndex = vi.fn();
     const onClose = vi.fn();
@@ -46,48 +41,23 @@ describe('PhotoViewerModal', () => {
       />,
     );
 
-    const viewer = screen.getByRole('dialog', { name: 'Photo viewer' });
-    const closeButton = within(viewer).getByRole('button', { name: 'Close viewer' });
+    const lightbox = screen.getByRole('dialog', { name: 'Image lightbox' });
+    const closeButton = within(lightbox).getByRole('button', { name: 'Close image' });
 
     expect(closeButton).toBeInTheDocument();
     expect(closeButton).toHaveFocus();
-    expect(within(viewer).getByRole('img', { name: 'one.jpg' })).toBeInTheDocument();
-    expect(within(viewer).getByText(/1 of 2/)).toBeInTheDocument();
-    expect(within(viewer).getByRole('heading', { name: 'Info' })).toBeInTheDocument();
-    expect(within(viewer).getByText('1200 × 800')).toBeInTheDocument();
-    expect(within(viewer).getByRole('button', { name: 'Bookmark photo' })).toBeDisabled();
-    expect(within(viewer).getByRole('button', { name: 'Share photo' })).toBeDisabled();
-    expect(within(viewer).getByRole('button', { name: 'Zoom in' })).toBeEnabled();
-    expect(within(viewer).getByRole('button', { name: 'Zoom out' })).toBeDisabled();
-    expect(within(viewer).getByRole('button', { name: 'Hide details' })).toBeEnabled();
-    expect(within(viewer).getByRole('button', { name: 'Previous photo' })).toBeDisabled();
-    expect(within(viewer).getByRole('img', { name: 'one.jpg' })).toBeInTheDocument();
+    expect(within(lightbox).getByRole('img', { name: 'one.jpg' })).toBeInTheDocument();
+    expect(within(lightbox).getByText('1 / 2')).toBeInTheDocument();
+    expect(within(lightbox).getByRole('button', { name: 'Previous image' })).toBeDisabled();
 
-    await user.click(within(viewer).getByRole('button', { name: 'Next photo' }));
+    await user.click(within(lightbox).getByRole('button', { name: 'Next image' }));
     expect(onSelectIndex).toHaveBeenCalledWith(1);
 
     await user.click(closeButton);
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it('renders exhibition viewer chrome with zoom status and details toggle copy', () => {
-    render(
-      <PhotoViewerModal
-        photos={photos}
-        selectedIndex={0}
-        onSelectIndex={vi.fn()}
-        onClose={vi.fn()}
-      />,
-    );
-
-    const viewer = screen.getByRole('dialog', { name: 'Photo viewer' });
-
-    expect(within(viewer).getByText('100%')).toBeInTheDocument();
-    expect(within(viewer).getByRole('button', { name: 'Hide details' })).toBeInTheDocument();
-    expect(within(viewer).getByText('Photo viewer')).toBeInTheDocument();
-  });
-
-  it('closes the viewer when Escape is pressed', async () => {
+  it('closes the lightbox when Escape is pressed', async () => {
     const user = userEvent.setup();
     const onClose = vi.fn();
 
@@ -105,43 +75,7 @@ describe('PhotoViewerModal', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it('navigates to previous photo with ArrowLeft key', async () => {
-    const user = userEvent.setup();
-    const onSelectIndex = vi.fn();
-
-    render(
-      <PhotoViewerModal
-        photos={photos}
-        selectedIndex={1}
-        onSelectIndex={onSelectIndex}
-        onClose={vi.fn()}
-      />,
-    );
-
-    await user.keyboard('{ArrowLeft}');
-
-    expect(onSelectIndex).toHaveBeenCalledWith(0);
-  });
-
-  it('navigates to next photo with ArrowRight key', async () => {
-    const user = userEvent.setup();
-    const onSelectIndex = vi.fn();
-
-    render(
-      <PhotoViewerModal
-        photos={photos}
-        selectedIndex={0}
-        onSelectIndex={onSelectIndex}
-        onClose={vi.fn()}
-      />,
-    );
-
-    await user.keyboard('{ArrowRight}');
-
-    expect(onSelectIndex).toHaveBeenCalledWith(1);
-  });
-
-  it('navigates with A and D keys', async () => {
+  it('navigates with ArrowLeft and ArrowRight keys', async () => {
     const user = userEvent.setup();
     const onSelectIndex = vi.fn();
 
@@ -154,7 +88,7 @@ describe('PhotoViewerModal', () => {
       />,
     );
 
-    await user.keyboard('a');
+    await user.keyboard('{ArrowLeft}');
     expect(onSelectIndex).toHaveBeenCalledWith(0);
 
     rerender(
@@ -167,107 +101,11 @@ describe('PhotoViewerModal', () => {
     );
 
     onSelectIndex.mockClear();
-    await user.keyboard('d');
-    expect(onSelectIndex).toHaveBeenCalledWith(1);
-  });
-
-  it('toggles details panel visibility', async () => {
-    const user = userEvent.setup();
-
-    render(
-      <PhotoViewerModal
-        photos={photos}
-        selectedIndex={0}
-        onSelectIndex={vi.fn()}
-        onClose={vi.fn()}
-      />,
-    );
-
-    const viewer = screen.getByRole('dialog', { name: 'Photo viewer' });
-    const toggleButton = within(viewer).getByRole('button', { name: 'Hide details' });
-
-    expect(within(viewer).getByRole('heading', { name: 'Info' })).toBeInTheDocument();
-
-    await user.click(toggleButton);
-    expect(within(viewer).queryByRole('heading', { name: 'Info' })).not.toBeInTheDocument();
-    expect(within(viewer).getByRole('button', { name: 'Show details' })).toBeInTheDocument();
-
-    await user.click(within(viewer).getByRole('button', { name: 'Show details' }));
-    expect(within(viewer).getByRole('heading', { name: 'Info' })).toBeInTheDocument();
-  });
-
-  it('wraps Shift+Tab from the close button to the last focusable control in the modal', async () => {
-    const user = userEvent.setup();
-
-    render(
-      <PhotoViewerModal
-        photos={photos}
-        selectedIndex={0}
-        onSelectIndex={vi.fn()}
-        onClose={vi.fn()}
-      />,
-    );
-
-    const viewer = screen.getByRole('dialog', { name: 'Photo viewer' });
-    const closeButton = within(viewer).getByRole('button', { name: 'Close viewer' });
-    const detailsToggleButton = within(viewer).getByRole('button', { name: 'Hide details' });
-
-    expect(closeButton).toHaveFocus();
-
-    await user.keyboard('{Shift>}{Tab}{/Shift}');
-
-    expect(detailsToggleButton).toHaveFocus();
-  });
-
-  it('wraps Tab from the last focusable control in the modal to the close button', async () => {
-    const user = userEvent.setup();
-
-    render(
-      <PhotoViewerModal
-        photos={photos}
-        selectedIndex={0}
-        onSelectIndex={vi.fn()}
-        onClose={vi.fn()}
-      />,
-    );
-
-    const viewer = screen.getByRole('dialog', { name: 'Photo viewer' });
-    const closeButton = within(viewer).getByRole('button', { name: 'Close viewer' });
-    const detailsToggleButton = within(viewer).getByRole('button', { name: 'Hide details' });
-
-    detailsToggleButton.focus();
-    expect(detailsToggleButton).toHaveFocus();
-
-    await user.keyboard('{Tab}');
-
-    expect(closeButton).toHaveFocus();
-  });
-
-  it('keeps ArrowRight navigation working after interacting with the image surface', async () => {
-    const user = userEvent.setup();
-    const onSelectIndex = vi.fn();
-
-    render(
-      <PhotoViewerModal
-        photos={photos}
-        selectedIndex={0}
-        onSelectIndex={onSelectIndex}
-        onClose={vi.fn()}
-      />,
-    );
-
-    const viewer = screen.getByRole('dialog', { name: 'Photo viewer' });
-
-    fireEvent.mouseDown(getPanSurface(viewer));
-    expect(viewer).toHaveFocus();
-
     await user.keyboard('{ArrowRight}');
-
     expect(onSelectIndex).toHaveBeenCalledWith(1);
   });
 
-  it('keeps Escape close working after interacting with the image surface', async () => {
-    const user = userEvent.setup();
+  it('closes when the backdrop is clicked', () => {
     const onClose = vi.fn();
 
     render(
@@ -279,17 +117,12 @@ describe('PhotoViewerModal', () => {
       />,
     );
 
-    const viewer = screen.getByRole('dialog', { name: 'Photo viewer' });
-
-    fireEvent.mouseDown(getPanSurface(viewer));
-    expect(viewer).toHaveFocus();
-
-    await user.keyboard('{Escape}');
+    fireEvent.click(screen.getByTestId('lightbox-backdrop'));
 
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it('moves Tab focus into the modal loop after interacting with the image surface', async () => {
+  it('keeps focus trapped inside the lightbox', async () => {
     const user = userEvent.setup();
 
     render(
@@ -301,86 +134,16 @@ describe('PhotoViewerModal', () => {
       />,
     );
 
-    const viewer = screen.getByRole('dialog', { name: 'Photo viewer' });
-    const closeButton = within(viewer).getByRole('button', { name: 'Close viewer' });
-
-    fireEvent.mouseDown(getPanSurface(viewer));
-    expect(viewer).toHaveFocus();
-
-    await user.keyboard('{Tab}');
+    const lightbox = screen.getByRole('dialog', { name: 'Image lightbox' });
+    const closeButton = within(lightbox).getByRole('button', { name: 'Close image' });
+    const nextButton = within(lightbox).getByRole('button', { name: 'Next image' });
 
     expect(closeButton).toHaveFocus();
-  });
 
-  it('zooms in and out with buttons', async () => {
-    const user = userEvent.setup();
+    await user.keyboard('{Shift>}{Tab}{/Shift}');
+    expect(nextButton).toHaveFocus();
 
-    render(
-      <PhotoViewerModal
-        photos={photos}
-        selectedIndex={0}
-        onSelectIndex={vi.fn()}
-        onClose={vi.fn()}
-      />,
-    );
-
-    const viewer = screen.getByRole('dialog', { name: 'Photo viewer' });
-    const zoomInButton = within(viewer).getByRole('button', { name: 'Zoom in' });
-    const zoomOutButton = within(viewer).getByRole('button', { name: 'Zoom out' });
-
-    expect(within(viewer).getByText('100%')).toBeInTheDocument();
-    expect(zoomOutButton).toBeDisabled();
-
-    await user.click(zoomInButton);
-    expect(within(viewer).getByText('150%')).toBeInTheDocument();
-    expect(zoomOutButton).toBeEnabled();
-
-    await user.click(zoomInButton);
-    expect(within(viewer).getByText('200%')).toBeInTheDocument();
-
-    await user.click(zoomInButton);
-    expect(within(viewer).getByText('300%')).toBeInTheDocument();
-    expect(zoomInButton).toBeDisabled();
-
-    await user.click(zoomOutButton);
-    expect(within(viewer).getByText('200%')).toBeInTheDocument();
-    expect(zoomInButton).toBeEnabled();
-  });
-
-  it('keeps pan translation in screen space after zooming', async () => {
-    const user = userEvent.setup();
-
-    render(
-      <PhotoViewerModal
-        photos={photos}
-        selectedIndex={0}
-        onSelectIndex={vi.fn()}
-        onClose={vi.fn()}
-      />,
-    );
-
-    const viewer = screen.getByRole('dialog', { name: 'Photo viewer' });
-    const zoomInButton = within(viewer).getByRole('button', { name: 'Zoom in' });
-    const image = within(viewer).getByRole('img', { name: 'one.jpg' });
-    const panSurface = image.parentElement;
-
-    expect(panSurface).not.toBeNull();
-
-    await user.click(zoomInButton);
-
-    fireEvent.mouseDown(panSurface as HTMLDivElement);
-
-    const mouseMoveEvent = new MouseEvent('mousemove', { bubbles: true });
-    Object.defineProperties(mouseMoveEvent, {
-      movementX: { value: 12 },
-      movementY: { value: 8 },
-    });
-
-    fireEvent(panSurface as HTMLDivElement, mouseMoveEvent);
-    fireEvent.mouseUp(panSurface as HTMLDivElement);
-
-    expect(image).toHaveStyle({
-      transform: 'translate(12px, 8px) scale(1.5)',
-    });
+    await user.keyboard('{Tab}');
+    expect(closeButton).toHaveFocus();
   });
 });

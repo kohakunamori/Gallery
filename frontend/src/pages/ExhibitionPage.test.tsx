@@ -97,7 +97,7 @@ describe('ExhibitionPage', () => {
 
     await user.click(await screen.findByRole('button', { name: 'Open fresh.jpg' }));
 
-    expect(screen.getByRole('dialog', { name: 'Photo viewer' })).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Image lightbox' })).toBeInTheDocument();
   });
 
   it('shows an empty message when no photos are returned', async () => {
