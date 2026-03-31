@@ -28,8 +28,8 @@ final class GetPhotosActionTest extends TestCase
     public function testReturnsConfiguredMediaBaseUrl(): void
     {
         $photosDir = dirname(__DIR__, 3) . '/storage/photos';
-        $cacheDir = dirname(__DIR__, 2) . '/var/cache/test-configured-media';
-        @mkdir($cacheDir, 0777, true);
+        $cacheDir = sys_get_temp_dir() . '/gallery-configured-media-' . bin2hex(random_bytes(4));
+        mkdir($cacheDir, 0777, true);
 
         $app = createApp(
             $photosDir,
