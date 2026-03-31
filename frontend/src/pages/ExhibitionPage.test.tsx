@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ExhibitionPage } from './ExhibitionPage';
@@ -136,9 +136,54 @@ describe('ExhibitionPage', () => {
 
     expect(screen.queryByRole('button', { name: 'Open photo-19.jpg' })).not.toBeInTheDocument();
 
-    MockIntersectionObserver.instances[0]?.trigger(true);
+    act(() => {
+      MockIntersectionObserver.instances[0]?.trigger(true);
+    });
 
     expect(await screen.findByRole('button', { name: 'Open photo-19.jpg' })).toBeInTheDocument();
+    expect(screen.getByText('End of exhibition')).toBeInTheDocument();
+  });
+
+  it('loads one batch per visibility entry and requires leaving before loading again', async () => {
+    const manyPhotos = Array.from({ length: 40 }, (_, index) => ({
+      id: `photo-${index}`,
+      filename: `photo-${index}.jpg`,
+      url: `/media/photo-${index}.jpg`,
+      thumbnailUrl: `/media/photo-${index}.jpg`,
+      takenAt: '2026-03-31T09:00:00Z',
+      sortTime: `2026-03-31T09:${String(59 - index).padStart(2, '0')}:00Z`,
+      width: 1200,
+      height: 800,
+    }));
+
+    mockedFetchPhotos.mockResolvedValue(manyPhotos);
+
+    render(<ExhibitionPage />);
+
+    await screen.findByRole('button', { name: 'Open photo-0.jpg' });
+
+    expect(screen.queryByRole('button', { name: 'Open photo-29.jpg' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Open photo-30.jpg' })).not.toBeInTheDocument();
+
+    act(() => {
+      MockIntersectionObserver.instances.at(-1)?.trigger(true);
+    });
+
+    expect(await screen.findByRole('button', { name: 'Open photo-29.jpg' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Open photo-30.jpg' })).not.toBeInTheDocument();
+
+    act(() => {
+      MockIntersectionObserver.instances.at(-1)?.trigger(true);
+    });
+
+    expect(screen.queryByRole('button', { name: 'Open photo-30.jpg' })).not.toBeInTheDocument();
+
+    act(() => {
+      MockIntersectionObserver.instances.at(-1)?.trigger(false);
+      MockIntersectionObserver.instances.at(-1)?.trigger(true);
+    });
+
+    expect(await screen.findByRole('button', { name: 'Open photo-39.jpg' })).toBeInTheDocument();
     expect(screen.getByText('End of exhibition')).toBeInTheDocument();
   });
 });

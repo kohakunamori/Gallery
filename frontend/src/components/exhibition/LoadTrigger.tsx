@@ -8,6 +8,7 @@ type LoadTriggerProps = {
 
 export function LoadTrigger({ disabled, isComplete, onLoadMore }: LoadTriggerProps) {
   const triggerRef = useRef<HTMLDivElement | null>(null);
+  const hasTriggeredForCurrentEntryRef = useRef(false);
 
   useEffect(() => {
     if (disabled || isComplete || triggerRef.current === null) {
@@ -15,9 +16,23 @@ export function LoadTrigger({ disabled, isComplete, onLoadMore }: LoadTriggerPro
     }
 
     const observer = new IntersectionObserver((entries) => {
-      if (entries[0]?.isIntersecting) {
-        onLoadMore();
+      const entry = entries[0];
+
+      if (!entry) {
+        return;
       }
+
+      if (!entry.isIntersecting) {
+        hasTriggeredForCurrentEntryRef.current = false;
+        return;
+      }
+
+      if (hasTriggeredForCurrentEntryRef.current) {
+        return;
+      }
+
+      hasTriggeredForCurrentEntryRef.current = true;
+      onLoadMore();
     }, { rootMargin: '600px 0px' });
 
     observer.observe(triggerRef.current);
