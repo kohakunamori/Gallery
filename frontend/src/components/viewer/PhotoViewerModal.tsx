@@ -13,8 +13,17 @@ type PhotoViewerModalProps = {
 };
 
 const ZOOM_LEVELS = [100, 150, 200, 300];
+const FOCUSABLE_SELECTOR = [
+  'button:not([disabled])',
+  '[href]',
+  'input:not([disabled])',
+  'select:not([disabled])',
+  'textarea:not([disabled])',
+  '[tabindex]:not([tabindex="-1"])',
+].join(', ');
 
 export function PhotoViewerModal({ photos, selectedIndex, onSelectIndex, onClose }: PhotoViewerModalProps) {
+  const dialogRef = useRef<HTMLDivElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const previouslyFocusedElementRef = useRef<HTMLElement | null>(null);
   const imageContainerRef = useRef<HTMLDivElement | null>(null);
@@ -155,6 +164,31 @@ export function PhotoViewerModal({ photos, selectedIndex, onSelectIndex, onClose
   };
 
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Tab') {
+      const focusableElements = dialogRef.current
+        ? Array.from(dialogRef.current.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
+            (element) => !element.hasAttribute('disabled') && element.tabIndex !== -1,
+          )
+        : [];
+
+      if (focusableElements.length > 0) {
+        const firstFocusableElement = focusableElements[0];
+        const lastFocusableElement = focusableElements[focusableElements.length - 1];
+
+        if (event.shiftKey && document.activeElement === firstFocusableElement) {
+          event.preventDefault();
+          lastFocusableElement.focus();
+          return;
+        }
+
+        if (!event.shiftKey && document.activeElement === lastFocusableElement) {
+          event.preventDefault();
+          firstFocusableElement.focus();
+          return;
+        }
+      }
+    }
+
     if (event.key === 'Escape') {
       event.stopPropagation();
       onClose();
@@ -179,6 +213,7 @@ export function PhotoViewerModal({ photos, selectedIndex, onSelectIndex, onClose
 
   return (
     <div
+      ref={dialogRef}
       className="fixed inset-0 z-50 overflow-hidden bg-[#050505] text-white"
       role="dialog"
       aria-modal="true"

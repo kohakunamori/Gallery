@@ -191,6 +191,53 @@ describe('PhotoViewerModal', () => {
     expect(within(viewer).getByRole('heading', { name: 'Info' })).toBeInTheDocument();
   });
 
+  it('wraps Shift+Tab from the close button to the last focusable control in the modal', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <PhotoViewerModal
+        photos={photos}
+        selectedIndex={0}
+        onSelectIndex={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const viewer = screen.getByRole('dialog', { name: 'Photo viewer' });
+    const closeButton = within(viewer).getByRole('button', { name: 'Close viewer' });
+    const detailsToggleButton = within(viewer).getByRole('button', { name: 'Hide details' });
+
+    expect(closeButton).toHaveFocus();
+
+    await user.keyboard('{Shift>}{Tab}{/Shift}');
+
+    expect(detailsToggleButton).toHaveFocus();
+  });
+
+  it('wraps Tab from the last focusable control in the modal to the close button', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <PhotoViewerModal
+        photos={photos}
+        selectedIndex={0}
+        onSelectIndex={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const viewer = screen.getByRole('dialog', { name: 'Photo viewer' });
+    const closeButton = within(viewer).getByRole('button', { name: 'Close viewer' });
+    const detailsToggleButton = within(viewer).getByRole('button', { name: 'Hide details' });
+
+    detailsToggleButton.focus();
+    expect(detailsToggleButton).toHaveFocus();
+
+    await user.keyboard('{Tab}');
+
+    expect(closeButton).toHaveFocus();
+  });
+
   it('zooms in and out with buttons', async () => {
     const user = userEvent.setup();
 
