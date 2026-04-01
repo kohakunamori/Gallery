@@ -6,10 +6,7 @@ use Gallery\Service\FilePhotoCache;
 
 require __DIR__ . '/../vendor/autoload.php';
 
-$mediaBaseUrl = getenv('GALLERY_MEDIA_BASE_URL');
-if ($mediaBaseUrl === false || $mediaBaseUrl === '') {
-    $mediaBaseUrl = '/media';
-}
+$mediaBaseUrl = 'https://static.cf.nyaneko.cn/gallery';
 
 $app = createApp(
     dirname(__DIR__, 2) . '/storage/photos',
