@@ -2,10 +2,16 @@ import { useEffect, useRef } from 'react';
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react';
 
 export type GalleryColumnPreference = 'auto' | 1 | 2 | 3 | 4;
+export type GallerySortPreference = 'newest' | 'oldest' | 'filename-asc' | 'filename-desc';
+export type GalleryMediaSourcePreference = 'r2' | 'local';
 
 type GallerySettingsModalProps = {
   columnPreference: GalleryColumnPreference;
+  sortPreference: GallerySortPreference;
+  mediaSourcePreference: GalleryMediaSourcePreference;
   onSelectColumnPreference: (value: GalleryColumnPreference) => void;
+  onSelectSortPreference: (value: GallerySortPreference) => void;
+  onSelectMediaSourcePreference: (value: GalleryMediaSourcePreference) => void;
   onClose: () => void;
 };
 
@@ -19,8 +25,26 @@ const FOCUSABLE_SELECTOR = [
 ].join(', ');
 
 const columnOptions: GalleryColumnPreference[] = ['auto', 1, 2, 3, 4];
+const sortOptions: Array<{ value: GallerySortPreference; label: string }> = [
+  { value: 'newest', label: 'Newest first' },
+  { value: 'oldest', label: 'Oldest first' },
+  { value: 'filename-asc', label: 'Filename A–Z' },
+  { value: 'filename-desc', label: 'Filename Z–A' },
+];
+const mediaSourceOptions: Array<{ value: GalleryMediaSourcePreference; label: string }> = [
+  { value: 'r2', label: 'R2' },
+  { value: 'local', label: 'Server local' },
+];
 
-export function GallerySettingsModal({ columnPreference, onSelectColumnPreference, onClose }: GallerySettingsModalProps) {
+export function GallerySettingsModal({
+  columnPreference,
+  sortPreference,
+  mediaSourcePreference,
+  onSelectColumnPreference,
+  onSelectSortPreference,
+  onSelectMediaSourcePreference,
+  onClose,
+}: GallerySettingsModalProps) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const previouslyFocusedElementRef = useRef<HTMLElement | null>(null);
@@ -107,29 +131,81 @@ export function GallerySettingsModal({ columnPreference, onSelectColumnPreferenc
           </button>
         </div>
 
-        <div className="space-y-3">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-on-surface-variant">Waterfall columns</p>
-          <div className="grid grid-cols-5 gap-2">
-            {columnOptions.map((option) => {
-              const isSelected = option === columnPreference;
-              const label = option === 'auto' ? 'Auto' : String(option);
+        <div className="space-y-6">
+          <div className="space-y-3">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-on-surface-variant">Sort order</p>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {sortOptions.map((option) => {
+                const isSelected = option.value === sortPreference;
 
-              return (
-                <button
-                  key={option}
-                  type="button"
-                  aria-pressed={isSelected}
-                  onClick={() => onSelectColumnPreference(option)}
-                  className={`inline-flex min-h-12 items-center justify-center rounded-2xl border px-3 text-sm font-medium transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
-                    isSelected
-                      ? 'border-primary/30 bg-primary/12 text-primary shadow-[0_10px_30px_rgba(37,99,235,0.14)]'
-                      : 'border-transparent bg-surface-container text-on-surface hover:bg-surface-container-high'
-                  }`}
-                >
-                  {label}
-                </button>
-              );
-            })}
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    aria-pressed={isSelected}
+                    onClick={() => onSelectSortPreference(option.value)}
+                    className={`inline-flex min-h-12 items-center justify-center rounded-2xl border px-4 text-sm font-medium transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
+                      isSelected
+                        ? 'border-primary/30 bg-primary/12 text-primary shadow-[0_10px_30px_rgba(37,99,235,0.14)]'
+                        : 'border-transparent bg-surface-container text-on-surface hover:bg-surface-container-high'
+                    }`}
+                  >
+                    {option.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-on-surface-variant">Media source</p>
+            <div className="grid grid-cols-2 gap-2">
+              {mediaSourceOptions.map((option) => {
+                const isSelected = option.value === mediaSourcePreference;
+
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    aria-pressed={isSelected}
+                    onClick={() => onSelectMediaSourcePreference(option.value)}
+                    className={`inline-flex min-h-12 items-center justify-center rounded-2xl border px-4 text-sm font-medium transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
+                      isSelected
+                        ? 'border-primary/30 bg-primary/12 text-primary shadow-[0_10px_30px_rgba(37,99,235,0.14)]'
+                        : 'border-transparent bg-surface-container text-on-surface hover:bg-surface-container-high'
+                    }`}
+                  >
+                    {option.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-on-surface-variant">Waterfall columns</p>
+            <div className="grid grid-cols-5 gap-2">
+              {columnOptions.map((option) => {
+                const isSelected = option === columnPreference;
+                const label = option === 'auto' ? 'Auto' : String(option);
+
+                return (
+                  <button
+                    key={option}
+                    type="button"
+                    aria-pressed={isSelected}
+                    onClick={() => onSelectColumnPreference(option)}
+                    className={`inline-flex min-h-12 items-center justify-center rounded-2xl border px-3 text-sm font-medium transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
+                      isSelected
+                        ? 'border-primary/30 bg-primary/12 text-primary shadow-[0_10px_30px_rgba(37,99,235,0.14)]'
+                        : 'border-transparent bg-surface-container text-on-surface hover:bg-surface-container-high'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
           </div>
         </div>
       </div>

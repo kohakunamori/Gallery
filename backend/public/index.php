@@ -12,6 +12,8 @@ $app = createApp(
     dirname(__DIR__, 2) . '/storage/photos',
     $mediaBaseUrl,
     new FilePhotoCache(dirname(__DIR__) . '/var/cache'),
+    false,
+    '/media',
 );
 
 $app->run();

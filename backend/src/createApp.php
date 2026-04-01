@@ -20,6 +20,7 @@ function createApp(
     string $mediaBaseUrl = '/media',
     ?PhotoCacheInterface $cache = null,
     bool $displayErrorDetails = false,
+    string $localMediaBaseUrl = '/media',
 ): \Slim\App {
     $app = AppFactory::create();
     $scanner = new PhotoScanner();
@@ -32,6 +33,7 @@ function createApp(
         $mediaBaseUrl,
         $cache ?? new NullPhotoCache(),
         15,
+        $localMediaBaseUrl,
     );
 
     $albumIndexService = new AlbumIndexService(
@@ -39,6 +41,7 @@ function createApp(
         $metadataReader,
         $photosDirectory,
         $mediaBaseUrl,
+        $localMediaBaseUrl,
     );
 
     $app->addRoutingMiddleware();

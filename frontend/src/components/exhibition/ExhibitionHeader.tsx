@@ -1,22 +1,30 @@
 type ExhibitionHeaderProps = {
   isAtTop: boolean;
+  isVisible: boolean;
   onOpenSettings: () => void;
 };
 
-export function ExhibitionHeader({ isAtTop, onOpenSettings }: ExhibitionHeaderProps) {
+export function ExhibitionHeader({ isAtTop, isVisible, onOpenSettings }: ExhibitionHeaderProps) {
   return (
     <header className="fixed inset-x-0 top-0 z-40 px-4 py-5 md:px-8" role="banner">
-      <div className="pointer-events-none mx-auto max-w-[2400px]">
+      <div
+        className={`mx-auto max-w-[2400px] transition-all duration-300 ${
+          isVisible ? 'translate-y-0 opacity-100' : '-translate-y-4 opacity-0 pointer-events-none'
+        }`}
+        data-testid="gallery-header-shell"
+      >
         <div className="relative min-h-12">
           <div
-            className={`absolute left-1/2 top-1/2 -translate-x-1/2 transition-all duration-500 ${
-              isAtTop
-                ? '-translate-y-1/2 opacity-100 scale-100'
-                : 'translate-y-0 opacity-0 scale-95'
-            }`}
+            className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 transition-all duration-500"
             data-testid="gallery-wordmark"
           >
-            <div className="rounded-full bg-surface/82 px-5 py-3 shadow-[0_12px_40px_rgba(15,23,42,0.08)] backdrop-blur-xl">
+            <div
+              className={`rounded-full px-5 py-3 transition-all duration-300 ${
+                isAtTop
+                  ? 'bg-surface/82 shadow-[0_12px_40px_rgba(15,23,42,0.08)] backdrop-blur-xl'
+                  : 'bg-surface/92 shadow-[0_10px_24px_rgba(15,23,42,0.12)] backdrop-blur-2xl'
+              }`}
+            >
               <p className="font-headline text-sm font-medium uppercase tracking-[0.28em] text-on-surface">Gallery</p>
             </div>
           </div>
@@ -26,7 +34,7 @@ export function ExhibitionHeader({ isAtTop, onOpenSettings }: ExhibitionHeaderPr
               type="button"
               aria-label="Open gallery settings"
               onClick={onOpenSettings}
-              className={`pointer-events-auto inline-flex min-h-12 items-center gap-2 rounded-full px-4 text-sm font-medium text-on-surface transition-all duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
+              className={`inline-flex min-h-12 items-center gap-2 rounded-full px-4 text-sm font-medium text-on-surface transition-all duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
                 isAtTop
                   ? 'bg-surface/78 shadow-[0_12px_36px_rgba(15,23,42,0.08)] backdrop-blur-xl'
                   : 'bg-surface/92 shadow-[0_10px_24px_rgba(15,23,42,0.12)] backdrop-blur-2xl'

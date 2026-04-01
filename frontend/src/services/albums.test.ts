@@ -15,15 +15,15 @@ describe('fetchAlbums', () => {
   });
 
   it('returns the items array from the API payload', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({ items: [sampleAlbum] }),
-      }),
-    );
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [sampleAlbum] }),
+    });
 
-    await expect(fetchAlbums()).resolves.toEqual([sampleAlbum]);
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(fetchAlbums('r2')).resolves.toEqual([sampleAlbum]);
+    expect(fetchMock).toHaveBeenCalledWith('/api/albums?mediaSource=r2');
   });
 
   it('throws on non-ok responses', async () => {
@@ -35,6 +35,6 @@ describe('fetchAlbums', () => {
       }),
     );
 
-    await expect(fetchAlbums()).rejects.toThrow('Request failed with status 500');
+    await expect(fetchAlbums('local')).rejects.toThrow('Request failed with status 500');
   });
 });

@@ -13,15 +13,17 @@ final class AlbumIndexService
         private readonly PhotoScannerInterface $scanner,
         private readonly PhotoMetadataReaderInterface $metadataReader,
         private readonly string $photosDirectory,
-        private readonly string $mediaBaseUrl,
+        private readonly string $defaultMediaBaseUrl,
+        private readonly string $localMediaBaseUrl = '/media',
     ) {
     }
 
     /**
      * @return list<array{id:string,name:string,coverUrl:string,photoCount:int,latestSortTime:string}>
      */
-    public function all(): array
+    public function all(string $mediaSource = 'r2'): array
     {
+        $mediaBaseUrl = $this->resolveMediaBaseUrl($mediaSource);
         $albums = [];
 
         foreach ($this->scanner->scan($this->photosDirectory) as $photo) {
@@ -55,7 +57,7 @@ final class AlbumIndexService
                 $albums[$albumId] = [
                     'id' => $albumId,
                     'name' => $albumId,
-                    'coverUrl' => rtrim($this->mediaBaseUrl, '/') . '/' . $this->encodeRelativePath($relativePath),
+                    'coverUrl' => rtrim($mediaBaseUrl, '/') . '/' . $this->encodeRelativePath($relativePath),
                     'photoCount' => 0,
                     'latestSortTime' => $sortTime,
                 ];
@@ -65,7 +67,7 @@ final class AlbumIndexService
 
             if (strcmp($sortTime, $albums[$albumId]['latestSortTime']) > 0) {
                 $albums[$albumId]['latestSortTime'] = $sortTime;
-                $albums[$albumId]['coverUrl'] = rtrim($this->mediaBaseUrl, '/') . '/' . $this->encodeRelativePath($relativePath);
+                $albums[$albumId]['coverUrl'] = rtrim($mediaBaseUrl, '/') . '/' . $this->encodeRelativePath($relativePath);
             }
         }
 
@@ -77,6 +79,11 @@ final class AlbumIndexService
         );
 
         return $items;
+    }
+
+    private function resolveMediaBaseUrl(string $mediaSource): string
+    {
+        return $mediaSource === 'local' ? $this->localMediaBaseUrl : $this->defaultMediaBaseUrl;
     }
 
     private function encodeRelativePath(string $relativePath): string

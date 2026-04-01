@@ -73,8 +73,14 @@ const photos = [
 describe('ExhibitionPage', () => {
   beforeEach(() => {
     mockedFetchPhotos.mockReset();
+    mockedFetchPhotos.mockImplementation(async () => photos);
     MockIntersectionObserver.instances = [];
     vi.stubGlobal('IntersectionObserver', MockIntersectionObserver);
+    Object.defineProperty(window, 'scrollY', {
+      writable: true,
+      configurable: true,
+      value: 0,
+    });
   });
 
   it('renders the exhibition header, hero, month sections, and photo tiles', async () => {
@@ -90,55 +96,44 @@ describe('ExhibitionPage', () => {
     expect(screen.getByRole('button', { name: 'Open late-afternoon.jpg' })).toBeInTheDocument();
   });
 
-  it('shows the Gallery wordmark when the page is at the top', async () => {
-    mockedFetchPhotos.mockResolvedValue(photos);
-
+  it('shows the header shell and wordmark when the page is at the top', async () => {
     render(<ExhibitionPage />);
 
     await screen.findByRole('banner');
-    const wordmark = screen.getByTestId('gallery-wordmark');
-    expect(wordmark).toHaveTextContent('Gallery');
-    expect(wordmark.className).toContain('opacity-100');
+    expect(screen.getByTestId('gallery-header-shell').className).toContain('opacity-100');
+    expect(screen.getByTestId('gallery-wordmark')).toHaveTextContent('Gallery');
   });
 
-  it('keeps settings accessible while the Gallery wordmark fades when leaving the top', async () => {
-    mockedFetchPhotos.mockResolvedValue(photos);
-
+  it('hides the whole header after downward scroll and only reveals it after enough upward scroll', async () => {
     render(<ExhibitionPage />);
 
     await screen.findByRole('banner');
-    const wordmark = screen.getByTestId('gallery-wordmark');
-    const settingsButton = screen.getByRole('button', { name: 'Open gallery settings' });
+    const headerShell = screen.getByTestId('gallery-header-shell');
 
     act(() => {
-      Object.defineProperty(window, 'scrollY', {
-        writable: true,
-        configurable: true,
-        value: 32,
-      });
-
+      window.scrollY = 80;
       window.dispatchEvent(new Event('scroll'));
     });
 
-    expect(wordmark.className).toContain('opacity-0');
-    expect(settingsButton).toBeEnabled();
+    expect(headerShell.className).toContain('opacity-0');
 
     act(() => {
-      Object.defineProperty(window, 'scrollY', {
-        writable: true,
-        configurable: true,
-        value: 0,
-      });
-
+      window.scrollY = 40;
       window.dispatchEvent(new Event('scroll'));
     });
 
-    expect(wordmark.className).toContain('opacity-100');
+    expect(headerShell.className).toContain('opacity-0');
+
+    act(() => {
+      window.scrollY = 0;
+      window.dispatchEvent(new Event('scroll'));
+    });
+
+    expect(headerShell.className).toContain('opacity-100');
   });
 
   it('opens the gallery settings dialog from the header', async () => {
     const user = userEvent.setup();
-    mockedFetchPhotos.mockResolvedValue(photos);
 
     render(<ExhibitionPage />);
 
@@ -146,11 +141,12 @@ describe('ExhibitionPage', () => {
 
     expect(screen.getByRole('dialog', { name: 'Gallery settings' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Close gallery settings' })).toHaveFocus();
+    expect(screen.getByRole('button', { name: 'Newest first' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'R2' })).toBeInTheDocument();
   });
 
   it('updates the waterfall column count from gallery settings', async () => {
     const user = userEvent.setup();
-    mockedFetchPhotos.mockResolvedValue(photos);
 
     render(<ExhibitionPage />);
 
@@ -160,9 +156,45 @@ describe('ExhibitionPage', () => {
     expect(screen.getAllByTestId(/waterfall-gallery/)[0]).toHaveAttribute('data-column-count', '2');
   });
 
+  it('updates rendered order when switching sort preference', async () => {
+    const user = userEvent.setup();
+
+    render(<ExhibitionPage />);
+
+    const initialButtons = await screen.findAllByRole('button', { name: /Open .*\.jpg/ });
+    expect(initialButtons.map((button) => button.getAttribute('aria-label'))).toEqual([
+      'Open late-afternoon.jpg',
+      'Open fresh.jpg',
+      'Open older.jpg',
+    ]);
+
+    await user.click(screen.getByRole('button', { name: 'Open gallery settings' }));
+    await user.click(screen.getByRole('button', { name: 'Oldest first' }));
+
+    const reorderedButtons = screen.getAllByRole('button', { name: /Open .*\.jpg/ });
+    expect(reorderedButtons.map((button) => button.getAttribute('aria-label'))).toEqual([
+      'Open older.jpg',
+      'Open fresh.jpg',
+      'Open late-afternoon.jpg',
+    ]);
+  });
+
+  it('refetches photos when switching media source', async () => {
+    const user = userEvent.setup();
+
+    render(<ExhibitionPage />);
+
+    await screen.findByRole('button', { name: 'Open late-afternoon.jpg' });
+    expect(mockedFetchPhotos).toHaveBeenNthCalledWith(1, 'r2');
+
+    await user.click(screen.getByRole('button', { name: 'Open gallery settings' }));
+    await user.click(screen.getByRole('button', { name: 'Server local' }));
+
+    expect(mockedFetchPhotos).toHaveBeenNthCalledWith(2, 'local');
+  });
+
   it('closes the gallery settings dialog with Escape and backdrop click', async () => {
     const user = userEvent.setup();
-    mockedFetchPhotos.mockResolvedValue(photos);
 
     render(<ExhibitionPage />);
 
@@ -179,7 +211,6 @@ describe('ExhibitionPage', () => {
 
   it('opens the in-page viewer when a photo tile is clicked', async () => {
     const user = userEvent.setup();
-    mockedFetchPhotos.mockResolvedValue(photos);
 
     render(<ExhibitionPage />);
 

@@ -36,6 +36,7 @@ final class GetPhotosActionTest extends TestCase
             'https://img.example.com',
             new \Gallery\Service\FilePhotoCache($cacheDir),
             true,
+            '/media',
         );
 
         $request = (new \Slim\Psr7\Factory\ServerRequestFactory())->createServerRequest('GET', '/api/photos');
@@ -44,5 +45,42 @@ final class GetPhotosActionTest extends TestCase
 
         self::assertStringStartsWith('https://img.example.com/', $payload['items'][0]['url']);
         self::assertStringStartsWith('https://img.example.com/', $payload['items'][0]['thumbnailUrl']);
+    }
+
+    public function testReturnsLocalMediaUrlsWhenRequested(): void
+    {
+        $photosDir = dirname(__DIR__, 3) . '/storage/photos';
+        $cacheDir = sys_get_temp_dir() . '/gallery-local-media-' . bin2hex(random_bytes(4));
+        mkdir($cacheDir, 0777, true);
+
+        $app = createApp(
+            $photosDir,
+            'https://img.example.com',
+            new \Gallery\Service\FilePhotoCache($cacheDir),
+            true,
+            '/media',
+        );
+
+        $request = (new \Slim\Psr7\Factory\ServerRequestFactory())
+            ->createServerRequest('GET', '/api/photos?mediaSource=local');
+        $response = $app->handle($request);
+        $payload = json_decode((string) $response->getBody(), true, 512, JSON_THROW_ON_ERROR);
+
+        self::assertStringStartsWith('/media/', $payload['items'][0]['url']);
+        self::assertStringStartsWith('/media/', $payload['items'][0]['thumbnailUrl']);
+    }
+
+    public function testRejectsInvalidMediaSource(): void
+    {
+        $photosDir = dirname(__DIR__, 3) . '/storage/photos';
+        $app = createApp($photosDir, 'https://img.example.com', null, true, '/media');
+
+        $request = (new \Slim\Psr7\Factory\ServerRequestFactory())
+            ->createServerRequest('GET', '/api/photos?mediaSource=bad');
+        $response = $app->handle($request);
+        $payload = json_decode((string) $response->getBody(), true, 512, JSON_THROW_ON_ERROR);
+
+        self::assertSame(400, $response->getStatusCode());
+        self::assertSame(['error' => 'Invalid mediaSource'], $payload);
     }
 }

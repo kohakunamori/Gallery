@@ -13,18 +13,20 @@ final class PhotoIndexService
         private readonly PhotoScannerInterface $scanner,
         private readonly PhotoMetadataReaderInterface $metadataReader,
         private readonly string $photosDirectory,
-        private readonly string $mediaBaseUrl,
+        private readonly string $defaultMediaBaseUrl,
         private readonly ?PhotoCacheInterface $cache = null,
         private readonly int $cacheTtlSeconds = 15,
+        private readonly string $localMediaBaseUrl = '/media',
     ) {
     }
 
     /**
      * @return list<array{id:string,filename:string,url:string,thumbnailUrl:string,takenAt:?string,sortTime:string,width:?int,height:?int}>
      */
-    public function all(): array
+    public function all(string $mediaSource = 'r2'): array
     {
-        $cacheKey = sha1($this->photosDirectory . '|' . $this->mediaBaseUrl);
+        $mediaBaseUrl = $this->resolveMediaBaseUrl($mediaSource);
+        $cacheKey = sha1($this->photosDirectory . '|' . $mediaBaseUrl);
 
         if ($this->cache !== null) {
             $cached = $this->cache->get($cacheKey);
@@ -56,7 +58,7 @@ final class PhotoIndexService
                 ?? (new DateTimeImmutable('@' . (string) $modifiedAt))
                     ->setTimezone(new DateTimeZone('UTC'))
                     ->format(DATE_ATOM);
-            $url = rtrim($this->mediaBaseUrl, '/') . '/' . $this->encodeRelativePath($relativePath);
+            $url = rtrim($mediaBaseUrl, '/') . '/' . $this->encodeRelativePath($relativePath);
 
             $items[] = [
                 'id' => sha1($relativePath . '|' . (string) $modifiedAt),
@@ -80,6 +82,11 @@ final class PhotoIndexService
         }
 
         return $items;
+    }
+
+    private function resolveMediaBaseUrl(string $mediaSource): string
+    {
+        return $mediaSource === 'local' ? $this->localMediaBaseUrl : $this->defaultMediaBaseUrl;
     }
 
     private function encodeRelativePath(string $relativePath): string

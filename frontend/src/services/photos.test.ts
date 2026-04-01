@@ -18,15 +18,15 @@ describe('fetchPhotos', () => {
   });
 
   it('returns the items array from the API payload', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({ items: [samplePhoto] }),
-      }),
-    );
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [samplePhoto] }),
+    });
 
-    await expect(fetchPhotos()).resolves.toEqual([samplePhoto]);
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(fetchPhotos('r2')).resolves.toEqual([samplePhoto]);
+    expect(fetchMock).toHaveBeenCalledWith('/api/photos?mediaSource=r2');
   });
 
   it('throws on non-ok responses', async () => {
@@ -38,6 +38,6 @@ describe('fetchPhotos', () => {
       }),
     );
 
-    await expect(fetchPhotos()).rejects.toThrow('Request failed with status 500');
+    await expect(fetchPhotos('local')).rejects.toThrow('Request failed with status 500');
   });
 });

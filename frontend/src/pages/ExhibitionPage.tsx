@@ -1,18 +1,26 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ExhibitionHeader } from '../components/exhibition/ExhibitionHeader';
 import { ExhibitionHero } from '../components/exhibition/ExhibitionHero';
 import { ExhibitionSection } from '../components/exhibition/ExhibitionSection';
 import { GallerySettingsModal } from '../components/exhibition/GallerySettingsModal';
-import type { GalleryColumnPreference } from '../components/exhibition/GallerySettingsModal';
+import type {
+  GalleryColumnPreference,
+  GalleryMediaSourcePreference,
+  GallerySortPreference,
+} from '../components/exhibition/GallerySettingsModal';
 import { LoadTrigger } from '../components/exhibition/LoadTrigger';
 import { PhotoViewerModal } from '../components/viewer/PhotoViewerModal';
 import { fetchPhotos } from '../services/photos';
 import type { Photo } from '../types/photo';
 import { readSelectedPhotoId, writeSelectedPhotoId } from '../utils/photoQuery';
 import { groupPhotosByMonth } from '../utils/groupPhotosByMonth';
+import { sortPhotos } from '../utils/sortPhotos';
 
 const INITIAL_VISIBLE_COUNT = 18;
 const LOAD_MORE_COUNT = 12;
+const TOP_VISIBILITY_THRESHOLD = 24;
+const DOWNWARD_HIDE_THRESHOLD = 64;
+const UPWARD_REVEAL_THRESHOLD = 96;
 
 export function ExhibitionPage() {
   const [photos, setPhotos] = useState<Photo[]>([]);
@@ -20,12 +28,49 @@ export function ExhibitionPage() {
   const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_COUNT);
   const [selectedPhotoId, setSelectedPhotoId] = useState<string | null>(() => readSelectedPhotoId());
   const [isAtTop, setIsAtTop] = useState(true);
+  const [isHeaderVisible, setIsHeaderVisible] = useState(true);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [columnPreference, setColumnPreference] = useState<GalleryColumnPreference>('auto');
+  const [sortPreference, setSortPreference] = useState<GallerySortPreference>('newest');
+  const [mediaSourcePreference, setMediaSourcePreference] = useState<GalleryMediaSourcePreference>('r2');
+  const previousScrollYRef = useRef(0);
+  const upwardRevealDistanceRef = useRef(0);
+  const downwardHideDistanceRef = useRef(0);
 
   useEffect(() => {
     const handleScroll = () => {
-      setIsAtTop(window.scrollY === 0);
+      const currentScrollY = Math.max(window.scrollY, 0);
+      const previousScrollY = previousScrollYRef.current;
+      const delta = currentScrollY - previousScrollY;
+      const isNearTop = currentScrollY <= TOP_VISIBILITY_THRESHOLD;
+
+      setIsAtTop(isNearTop);
+
+      if (isNearTop) {
+        upwardRevealDistanceRef.current = 0;
+        downwardHideDistanceRef.current = 0;
+        setIsHeaderVisible(true);
+        previousScrollYRef.current = currentScrollY;
+        return;
+      }
+
+      if (delta > 0) {
+        upwardRevealDistanceRef.current = 0;
+        downwardHideDistanceRef.current += delta;
+
+        if (downwardHideDistanceRef.current >= DOWNWARD_HIDE_THRESHOLD) {
+          setIsHeaderVisible(false);
+        }
+      } else if (delta < 0) {
+        downwardHideDistanceRef.current = 0;
+        upwardRevealDistanceRef.current += Math.abs(delta);
+
+        if (upwardRevealDistanceRef.current >= UPWARD_REVEAL_THRESHOLD) {
+          setIsHeaderVisible(true);
+        }
+      }
+
+      previousScrollYRef.current = currentScrollY;
     };
 
     handleScroll();
@@ -39,18 +84,17 @@ export function ExhibitionPage() {
   useEffect(() => {
     let cancelled = false;
 
-    fetchPhotos()
+    setStatus('loading');
+    setVisibleCount(INITIAL_VISIBLE_COUNT);
+
+    fetchPhotos(mediaSourcePreference)
       .then((items) => {
         if (cancelled) {
           return;
         }
 
-        const orderedItems = [...items].sort(
-          (left, right) => new Date(right.sortTime).getTime() - new Date(left.sortTime).getTime(),
-        );
-
-        setPhotos(orderedItems);
-        setStatus(orderedItems.length === 0 ? 'empty' : 'ready');
+        setPhotos(items);
+        setStatus(items.length === 0 ? 'empty' : 'ready');
       })
       .catch(() => {
         if (!cancelled) {
@@ -61,19 +105,26 @@ export function ExhibitionPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [mediaSourcePreference]);
 
-  const visiblePhotos = useMemo(() => photos.slice(0, visibleCount), [photos, visibleCount]);
+  useEffect(() => {
+    if (isSettingsOpen) {
+      setIsHeaderVisible(true);
+    }
+  }, [isSettingsOpen]);
+
+  const sortedPhotos = useMemo(() => sortPhotos(photos, sortPreference), [photos, sortPreference]);
+  const visiblePhotos = useMemo(() => sortedPhotos.slice(0, visibleCount), [sortedPhotos, visibleCount]);
   const groups = useMemo(() => groupPhotosByMonth(visiblePhotos), [visiblePhotos]);
-  const selectedIndex = photos.findIndex((photo) => photo.id === selectedPhotoId);
+  const selectedIndex = sortedPhotos.findIndex((photo) => photo.id === selectedPhotoId);
 
-  const hasMorePhotos = visibleCount < photos.length;
+  const hasMorePhotos = visibleCount < sortedPhotos.length;
 
   const loadMore = () => {
     if (!hasMorePhotos) {
       return;
     }
-    setVisibleCount((current) => Math.min(current + LOAD_MORE_COUNT, photos.length));
+    setVisibleCount((current) => Math.min(current + LOAD_MORE_COUNT, sortedPhotos.length));
   };
 
   const openPhoto = (photoId: string) => {
@@ -95,7 +146,7 @@ export function ExhibitionPage() {
   };
 
   const selectPhotoAtIndex = (index: number) => {
-    const nextPhoto = photos[index];
+    const nextPhoto = sortedPhotos[index];
 
     if (!nextPhoto) {
       return;
@@ -107,7 +158,7 @@ export function ExhibitionPage() {
 
   return (
     <>
-      <ExhibitionHeader isAtTop={isAtTop} onOpenSettings={openSettings} />
+      <ExhibitionHeader isAtTop={isAtTop} isVisible={isHeaderVisible} onOpenSettings={openSettings} />
       <main className="min-h-screen bg-surface text-on-surface">
         <ExhibitionHero />
 
@@ -135,14 +186,18 @@ export function ExhibitionPage() {
       {isSettingsOpen && (
         <GallerySettingsModal
           columnPreference={columnPreference}
+          sortPreference={sortPreference}
+          mediaSourcePreference={mediaSourcePreference}
           onSelectColumnPreference={setColumnPreference}
+          onSelectSortPreference={setSortPreference}
+          onSelectMediaSourcePreference={setMediaSourcePreference}
           onClose={closeSettings}
         />
       )}
 
       {status === 'ready' && selectedIndex >= 0 && (
         <PhotoViewerModal
-          photos={photos}
+          photos={sortedPhotos}
           selectedIndex={selectedIndex}
           onSelectIndex={selectPhotoAtIndex}
           onClose={closeViewer}
