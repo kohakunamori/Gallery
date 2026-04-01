@@ -1,17 +1,49 @@
 type ExhibitionHeaderProps = {
   isAtTop: boolean;
+  onOpenSettings: () => void;
 };
 
-export function ExhibitionHeader({ isAtTop }: ExhibitionHeaderProps) {
+export function ExhibitionHeader({ isAtTop, onOpenSettings }: ExhibitionHeaderProps) {
   return (
-    <header
-      className={`fixed inset-x-0 top-0 z-40 flex justify-center px-4 py-6 transition-opacity duration-300 md:px-8 ${
-        isAtTop ? 'opacity-100' : 'pointer-events-none opacity-0'
-      }`}
-      role="banner"
-    >
-      <div className="rounded-full bg-surface/80 px-5 py-3 backdrop-blur-xl">
-        <p className="font-headline text-sm font-medium uppercase tracking-[0.28em] text-on-surface">Gallery</p>
+    <header className="fixed inset-x-0 top-0 z-40 px-4 py-5 md:px-8" role="banner">
+      <div className="pointer-events-none mx-auto max-w-[2400px]">
+        <div className="relative min-h-12">
+          <div
+            className={`absolute left-1/2 top-1/2 -translate-x-1/2 transition-all duration-500 ${
+              isAtTop
+                ? '-translate-y-1/2 opacity-100 scale-100'
+                : 'translate-y-0 opacity-0 scale-95'
+            }`}
+            data-testid="gallery-wordmark"
+          >
+            <div className="rounded-full bg-surface/82 px-5 py-3 shadow-[0_12px_40px_rgba(15,23,42,0.08)] backdrop-blur-xl">
+              <p className="font-headline text-sm font-medium uppercase tracking-[0.28em] text-on-surface">Gallery</p>
+            </div>
+          </div>
+
+          <div className="flex justify-end">
+            <button
+              type="button"
+              aria-label="Open gallery settings"
+              onClick={onOpenSettings}
+              className={`pointer-events-auto inline-flex min-h-12 items-center gap-2 rounded-full px-4 text-sm font-medium text-on-surface transition-all duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
+                isAtTop
+                  ? 'bg-surface/78 shadow-[0_12px_36px_rgba(15,23,42,0.08)] backdrop-blur-xl'
+                  : 'bg-surface/92 shadow-[0_10px_24px_rgba(15,23,42,0.12)] backdrop-blur-2xl'
+              }`}
+            >
+              <svg viewBox="0 0 20 20" aria-hidden="true" className="h-4 w-4 fill-none stroke-current stroke-[1.7]">
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M8.3 2.8h3.4l.5 2.1a5.7 5.7 0 0 1 1.1.6l2-.8 1.7 2.9-1.5 1.5c.1.4.1.8.1 1.1 0 .4 0 .8-.1 1.1l1.5 1.5-1.7 2.9-2-.8c-.4.2-.7.4-1.1.6l-.5 2.1H8.3l-.5-2.1a5.7 5.7 0 0 1-1.1-.6l-2 .8-1.7-2.9L4.5 12c-.1-.4-.1-.8-.1-1.1 0-.4 0-.8.1-1.1L3 8.3l1.7-2.9 2 .8c.4-.2.7-.4 1.1-.6l.5-2.1Z"
+                />
+                <circle cx="10" cy="10" r="2.1" />
+              </svg>
+              <span>Settings</span>
+            </button>
+          </div>
+        </div>
       </div>
     </header>
   );

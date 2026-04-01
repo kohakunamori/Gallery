@@ -104,7 +104,7 @@ describe('WaterfallCard', () => {
     expect(secondImage).toHaveClass('opacity-0');
   });
 
-  it('unloads the image when it is far outside the viewport and restores it when it comes back', () => {
+  it('keeps the image mounted after it has been revealed once', () => {
     render(<WaterfallCard photo={photo} onOpen={vi.fn()} />);
 
     act(() => {
@@ -116,11 +116,7 @@ describe('WaterfallCard', () => {
     act(() => {
       MockIntersectionObserver.instances[0]?.trigger(false);
     });
-    expect(screen.queryByRole('img', { name: 'one.jpg' })).not.toBeInTheDocument();
 
-    act(() => {
-      MockIntersectionObserver.instances[0]?.trigger(true);
-    });
     expect(screen.getByRole('img', { name: 'one.jpg' })).toBeInTheDocument();
   });
 });

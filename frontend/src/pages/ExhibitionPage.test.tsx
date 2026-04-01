@@ -82,29 +82,33 @@ describe('ExhibitionPage', () => {
 
     render(<ExhibitionPage />);
 
-    expect(await screen.findByRole('banner')).toHaveTextContent('Gallery');
+    expect(await screen.findByRole('banner')).toHaveTextContent('Settings');
+    expect(screen.getByTestId('gallery-wordmark')).toHaveTextContent('Gallery');
     expect(screen.queryByRole('heading', { name: 'A curated wall of AIGC imagery.' })).not.toBeInTheDocument();
     expect(screen.getByText('March 2026')).toBeInTheDocument();
     expect(screen.getByText('February 2026')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Open late-afternoon.jpg' })).toBeInTheDocument();
   });
 
-  it('shows the Gallery header when the page is at the top', async () => {
+  it('shows the Gallery wordmark when the page is at the top', async () => {
     mockedFetchPhotos.mockResolvedValue(photos);
 
     render(<ExhibitionPage />);
 
-    const banner = await screen.findByRole('banner');
-    expect(banner).toHaveTextContent('Gallery');
-    expect(banner).not.toHaveClass('opacity-0');
+    await screen.findByRole('banner');
+    const wordmark = screen.getByTestId('gallery-wordmark');
+    expect(wordmark).toHaveTextContent('Gallery');
+    expect(wordmark.className).toContain('opacity-100');
   });
 
-  it('toggles the Gallery header visibility as the page leaves and returns to the top', async () => {
+  it('keeps settings accessible while the Gallery wordmark fades when leaving the top', async () => {
     mockedFetchPhotos.mockResolvedValue(photos);
 
     render(<ExhibitionPage />);
 
-    const banner = await screen.findByRole('banner');
+    await screen.findByRole('banner');
+    const wordmark = screen.getByTestId('gallery-wordmark');
+    const settingsButton = screen.getByRole('button', { name: 'Open gallery settings' });
 
     act(() => {
       Object.defineProperty(window, 'scrollY', {
@@ -116,8 +120,8 @@ describe('ExhibitionPage', () => {
       window.dispatchEvent(new Event('scroll'));
     });
 
-    expect(banner).toHaveClass('opacity-0');
-    expect(banner).toHaveClass('pointer-events-none');
+    expect(wordmark.className).toContain('opacity-0');
+    expect(settingsButton).toBeEnabled();
 
     act(() => {
       Object.defineProperty(window, 'scrollY', {
@@ -129,7 +133,48 @@ describe('ExhibitionPage', () => {
       window.dispatchEvent(new Event('scroll'));
     });
 
-    expect(banner).not.toHaveClass('opacity-0');
+    expect(wordmark.className).toContain('opacity-100');
+  });
+
+  it('opens the gallery settings dialog from the header', async () => {
+    const user = userEvent.setup();
+    mockedFetchPhotos.mockResolvedValue(photos);
+
+    render(<ExhibitionPage />);
+
+    await user.click(await screen.findByRole('button', { name: 'Open gallery settings' }));
+
+    expect(screen.getByRole('dialog', { name: 'Gallery settings' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Close gallery settings' })).toHaveFocus();
+  });
+
+  it('updates the waterfall column count from gallery settings', async () => {
+    const user = userEvent.setup();
+    mockedFetchPhotos.mockResolvedValue(photos);
+
+    render(<ExhibitionPage />);
+
+    await user.click(await screen.findByRole('button', { name: 'Open gallery settings' }));
+    await user.click(screen.getByRole('button', { name: '2' }));
+
+    expect(screen.getAllByTestId(/waterfall-gallery/)[0]).toHaveAttribute('data-column-count', '2');
+  });
+
+  it('closes the gallery settings dialog with Escape and backdrop click', async () => {
+    const user = userEvent.setup();
+    mockedFetchPhotos.mockResolvedValue(photos);
+
+    render(<ExhibitionPage />);
+
+    await user.click(await screen.findByRole('button', { name: 'Open gallery settings' }));
+    await user.keyboard('{Escape}');
+
+    expect(screen.queryByRole('dialog', { name: 'Gallery settings' })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Open gallery settings' }));
+    await user.click(screen.getByTestId('gallery-settings-backdrop'));
+
+    expect(screen.queryByRole('dialog', { name: 'Gallery settings' })).not.toBeInTheDocument();
   });
 
   it('opens the in-page viewer when a photo tile is clicked', async () => {

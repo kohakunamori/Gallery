@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { ExhibitionHeader } from '../components/exhibition/ExhibitionHeader';
 import { ExhibitionHero } from '../components/exhibition/ExhibitionHero';
 import { ExhibitionSection } from '../components/exhibition/ExhibitionSection';
+import { GallerySettingsModal } from '../components/exhibition/GallerySettingsModal';
+import type { GalleryColumnPreference } from '../components/exhibition/GallerySettingsModal';
 import { LoadTrigger } from '../components/exhibition/LoadTrigger';
 import { PhotoViewerModal } from '../components/viewer/PhotoViewerModal';
 import { fetchPhotos } from '../services/photos';
@@ -18,6 +20,8 @@ export function ExhibitionPage() {
   const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_COUNT);
   const [selectedPhotoId, setSelectedPhotoId] = useState<string | null>(() => readSelectedPhotoId());
   const [isAtTop, setIsAtTop] = useState(true);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [columnPreference, setColumnPreference] = useState<GalleryColumnPreference>('auto');
 
   useEffect(() => {
     const handleScroll = () => {
@@ -82,6 +86,14 @@ export function ExhibitionPage() {
     writeSelectedPhotoId(null);
   };
 
+  const openSettings = () => {
+    setIsSettingsOpen(true);
+  };
+
+  const closeSettings = () => {
+    setIsSettingsOpen(false);
+  };
+
   const selectPhotoAtIndex = (index: number) => {
     const nextPhoto = photos[index];
 
@@ -95,7 +107,7 @@ export function ExhibitionPage() {
 
   return (
     <>
-      <ExhibitionHeader isAtTop={isAtTop} />
+      <ExhibitionHeader isAtTop={isAtTop} onOpenSettings={openSettings} />
       <main className="min-h-screen bg-surface text-on-surface">
         <ExhibitionHero />
 
@@ -106,13 +118,27 @@ export function ExhibitionPage() {
           {status === 'ready' && (
             <div>
               {groups.map((group) => (
-                <ExhibitionSection key={group.title} title={group.title} photos={group.photos} onOpen={openPhoto} />
+                <ExhibitionSection
+                  key={group.title}
+                  title={group.title}
+                  photos={group.photos}
+                  columnPreference={columnPreference}
+                  onOpen={openPhoto}
+                />
               ))}
               <LoadTrigger disabled={false} isComplete={!hasMorePhotos} onLoadMore={loadMore} />
             </div>
           )}
         </section>
       </main>
+
+      {isSettingsOpen && (
+        <GallerySettingsModal
+          columnPreference={columnPreference}
+          onSelectColumnPreference={setColumnPreference}
+          onClose={closeSettings}
+        />
+      )}
 
       {status === 'ready' && selectedIndex >= 0 && (
         <PhotoViewerModal

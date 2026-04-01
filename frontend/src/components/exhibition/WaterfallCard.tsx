@@ -9,7 +9,7 @@ type WaterfallCardProps = {
 export function WaterfallCard({ photo, onOpen }: WaterfallCardProps) {
   const [loadedThumbnailUrl, setLoadedThumbnailUrl] = useState<string | null>(null);
   const cardRef = useRef<HTMLDivElement | null>(null);
-  const [isNearViewport, setIsNearViewport] = useState(false);
+  const [shouldRenderImage, setShouldRenderImage] = useState(false);
   const isLoaded = loadedThumbnailUrl === photo.thumbnailUrl;
 
   useEffect(() => {
@@ -19,7 +19,9 @@ export function WaterfallCard({ photo, onOpen }: WaterfallCardProps) {
 
     const observer = new IntersectionObserver(
       ([entry]) => {
-        setIsNearViewport(entry?.isIntersecting ?? false);
+        if (entry?.isIntersecting) {
+          setShouldRenderImage(true);
+        }
       },
       { rootMargin: '1200px 0px' },
     );
@@ -42,22 +44,28 @@ export function WaterfallCard({ photo, onOpen }: WaterfallCardProps) {
       type="button"
       aria-label={`Open ${photo.filename}`}
       onClick={() => onOpen(photo.id)}
-      className="group mb-2 block w-full overflow-hidden rounded-xl bg-surface-container-low text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 [break-inside:avoid]"
+      className="group block w-full overflow-hidden rounded-xl bg-surface-container-low text-left shadow-[0_10px_28px_rgba(15,23,42,0.05)] transition-transform duration-500 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
     >
       <div ref={cardRef} className="relative overflow-hidden" data-testid="waterfall-card-frame" style={{ aspectRatio }}>
-        {isNearViewport && (
+        <div className="absolute inset-0 bg-surface-container-low transition-opacity duration-700 ease-out group-hover:opacity-60" />
+        {shouldRenderImage && (
           <img
             src={photo.thumbnailUrl}
             alt={photo.filename}
             loading="lazy"
             onLoad={() => setLoadedThumbnailUrl(photo.thumbnailUrl)}
-            className={`block h-full w-full object-cover transition-all duration-500 ${
-              isLoaded ? 'opacity-100 group-hover:scale-[1.03]' : 'opacity-0'
+            className={`block h-full w-full object-cover transition-[opacity,transform,filter] duration-700 ease-out ${
+              isLoaded ? 'opacity-100 saturate-100 group-hover:scale-[1.02]' : 'scale-[1.015] opacity-0 saturate-75'
             }`}
           />
         )}
-        <div className="absolute inset-0 flex items-end bg-black/10 p-4 opacity-0 transition-opacity duration-300 group-hover:opacity-100">
-          <span className="text-[10px] font-medium uppercase tracking-[0.24em] text-white">View details</span>
+        <div
+          className={`absolute inset-0 bg-gradient-to-t from-black/20 via-black/0 to-transparent transition-opacity duration-500 ${
+            isLoaded ? 'opacity-100' : 'opacity-0'
+          }`}
+        />
+        <div className="absolute inset-0 flex items-end p-4 opacity-0 transition-opacity duration-300 group-hover:opacity-100">
+          <span className="text-[10px] font-medium uppercase tracking-[0.24em] text-white/92">View details</span>
         </div>
       </div>
     </button>
