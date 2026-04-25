@@ -2,6 +2,7 @@
 backend/vendor/
 backend/var/cache/
 backend/.phpunit.cache/
+backend/.env
 frontend/node_modules/
 frontend/dist/
 phpenv/

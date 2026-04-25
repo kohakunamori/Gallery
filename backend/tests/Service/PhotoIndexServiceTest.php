@@ -6,9 +6,11 @@ namespace Gallery\Tests\Service;
 
 use ArrayObject;
 use Gallery\Service\FilePhotoCache;
+use Gallery\Service\MediaSourceAvailabilityService;
 use Gallery\Service\PhotoIndexService;
 use Gallery\Service\PhotoMetadataReaderInterface;
 use Gallery\Service\PhotoScannerInterface;
+use Gallery\Service\QiniuUsageService;
 use PHPUnit\Framework\TestCase;
 
 final class PhotoIndexServiceTest extends TestCase
@@ -60,12 +62,15 @@ final class PhotoIndexServiceTest extends TestCase
 
         $service = new PhotoIndexService($scanner, $metadataReader, $directory, '/media');
         $items = $service->all();
+        $fallbackVersion = sha1('fallback.png|' . (string) strtotime('2026-03-31 11:00:00 UTC'));
+        $withExifVersion = sha1('travel/with-exif.jpg|' . (string) strtotime('2026-03-25 09:00:00 UTC'));
+        $olderVersion = sha1('travel/beach day.jpg|' . (string) strtotime('2026-03-20 09:00:00 UTC'));
 
         self::assertSame(['fallback.png', 'with-exif.jpg', 'beach day.jpg'], array_column($items, 'filename'));
-        self::assertSame('/media/fallback.png', $items[0]['url']);
-        self::assertSame('/media/travel/with-exif.jpg', $items[1]['url']);
-        self::assertSame('/media/travel/beach%20day.jpg', $items[2]['url']);
-        self::assertSame('/media/travel/beach%20day.jpg', $items[2]['thumbnailUrl']);
+        self::assertSame('/media/fallback.png?v=' . $fallbackVersion, $items[0]['url']);
+        self::assertSame('/media/travel/with-exif.jpg?v=' . $withExifVersion, $items[1]['url']);
+        self::assertSame('/media/travel/beach%20day.jpg?v=' . $olderVersion, $items[2]['url']);
+        self::assertSame('/media/travel/beach%20day.jpg?v=' . $olderVersion, $items[2]['thumbnailUrl']);
         self::assertSame('2026-03-31T11:00:00+00:00', $items[0]['sortTime']);
         self::assertNotSame($items[0]['id'], $items[1]['id']);
     }
@@ -162,5 +167,77 @@ final class PhotoIndexServiceTest extends TestCase
         $service->all();
 
         self::assertSame(1, $scanCounter['count']);
+    }
+
+    public function test_it_builds_qiniu_media_urls_when_qiniu_is_available(): void
+    {
+        $directory = sys_get_temp_dir() . '/gallery-index-' . bin2hex(random_bytes(4));
+        mkdir($directory . '/travel', 0777, true);
+
+        $photo = $directory . '/travel/beach day.jpg';
+        file_put_contents($photo, 'qiniu-photo');
+        touch($photo, strtotime('2026-03-31 12:00:00 UTC'));
+
+        $scanner = new class($photo) implements PhotoScannerInterface {
+            public function __construct(private readonly string $photo)
+            {
+            }
+
+            public function scan(string $directory): array
+            {
+                return [
+                    [
+                        'absolutePath' => $this->photo,
+                        'relativePath' => 'travel/beach day.jpg',
+                    ],
+                ];
+            }
+        };
+
+        $metadataReader = new class implements PhotoMetadataReaderInterface {
+            public function read(string $path): array
+            {
+                return ['takenAt' => null, 'width' => 1200, 'height' => 800];
+            }
+        };
+
+        $qiniuUsageService = new QiniuUsageService(
+            'ak',
+            'sk',
+            'bucket',
+            'cdn.example.com',
+            'api.qiniuapi.com',
+            null,
+            900,
+            10 * 1024 * 1024 * 1024,
+            static fn (string $requestTarget, array $headers): string => json_encode([
+                [
+                    'values' => [
+                        'flow' => 1024,
+                    ],
+                ],
+            ], JSON_THROW_ON_ERROR),
+        );
+        $availabilityService = new MediaSourceAvailabilityService([
+            'r2' => 'https://r2.example.com/gallery',
+            'qiniu' => 'https://qiniu.example.com/gallery',
+            'local' => '/media',
+        ], $qiniuUsageService);
+        $service = new PhotoIndexService(
+            $scanner,
+            $metadataReader,
+            $directory,
+            'https://r2.example.com/gallery',
+            null,
+            15,
+            '/media',
+            $availabilityService,
+        );
+
+        $items = $service->all('qiniu');
+        $version = sha1('travel/beach day.jpg|' . (string) strtotime('2026-03-31 12:00:00 UTC'));
+
+        self::assertSame('https://qiniu.example.com/gallery/travel/beach%20day.jpg?v=' . $version, $items[0]['url']);
+        self::assertSame('https://qiniu.example.com/gallery/travel/beach%20day.jpg?v=' . $version, $items[0]['thumbnailUrl']);
     }
 }

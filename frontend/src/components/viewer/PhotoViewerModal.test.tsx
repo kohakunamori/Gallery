@@ -1,6 +1,8 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as WaterfallCardModule from '../exhibition/WaterfallCard';
+import { cachePhotoImageForTest, resetPreloadedImages } from '../exhibition/WaterfallCard';
 import { PhotoViewerModal } from './PhotoViewerModal';
 
 const photos = [
@@ -25,6 +27,14 @@ const photos = [
     height: 800,
   },
 ];
+
+beforeEach(() => {
+  vi.restoreAllMocks();
+});
+
+afterEach(() => {
+  resetPreloadedImages();
+});
 
 describe('PhotoViewerModal', () => {
   it('renders a minimal lightbox with image, page count, and basic navigation', async () => {
@@ -105,21 +115,82 @@ describe('PhotoViewerModal', () => {
     expect(onSelectIndex).toHaveBeenCalledWith(1);
   });
 
-  it('closes when the backdrop is clicked', () => {
-    const onClose = vi.fn();
+  it('preloads the adjacent original image when the modal opens', () => {
+    const preloadSpy = vi.spyOn(WaterfallCardModule, 'preloadPhotoImage').mockImplementation(() => {});
 
     render(
       <PhotoViewerModal
         photos={photos}
         selectedIndex={0}
         onSelectIndex={vi.fn()}
-        onClose={onClose}
+        onClose={vi.fn()}
       />,
     );
 
-    fireEvent.click(screen.getByTestId('lightbox-backdrop'));
+    expect(preloadSpy).toHaveBeenCalledWith('two', '/media/two.jpg');
+  });
 
-    expect(onClose).toHaveBeenCalledTimes(1);
+  it('updates adjacent preloading when the selected image changes', () => {
+    const preloadSpy = vi.spyOn(WaterfallCardModule, 'preloadPhotoImage').mockImplementation(() => {});
+    const photosWithThree = [
+      ...photos,
+      {
+        id: 'three',
+        filename: 'three.jpg',
+        url: '/media/three.jpg',
+        thumbnailUrl: '/media/three.jpg',
+        takenAt: '2026-03-29T09:00:00+00:00',
+        sortTime: '2026-03-29T09:00:00+00:00',
+        width: 1200,
+        height: 800,
+      },
+    ];
+
+    const { rerender } = render(
+      <PhotoViewerModal
+        photos={photosWithThree}
+        selectedIndex={1}
+        onSelectIndex={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(preloadSpy).toHaveBeenCalledWith('one', '/media/one.jpg');
+    expect(preloadSpy).toHaveBeenCalledWith('three', '/media/three.jpg');
+
+    preloadSpy.mockClear();
+
+    rerender(
+      <PhotoViewerModal
+        photos={photosWithThree}
+        selectedIndex={2}
+        onSelectIndex={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(preloadSpy).toHaveBeenCalledWith('two', '/media/two.jpg');
+  });
+
+  it('prefers a cached image url for the same photo id', () => {
+    cachePhotoImageForTest('one', 'https://r2.example.com/one.jpg');
+
+    render(
+      <PhotoViewerModal
+        photos={[
+          {
+            ...photos[0],
+            url: 'https://qiniu.example.com/one.jpg',
+          },
+          photos[1],
+        ]}
+        selectedIndex={0}
+        onSelectIndex={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('img', { name: 'one.jpg' })).toHaveAttribute('src', 'https://r2.example.com/one.jpg');
   });
 
   it('keeps focus trapped inside the lightbox', async () => {

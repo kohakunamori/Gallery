@@ -1,6 +1,12 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { WaterfallCard } from './WaterfallCard';
+import {
+  cachePhotoImageForTest,
+  getCachedPhotoImageUrl,
+  markImageAsPreloadedForTest,
+  resetPreloadedImages,
+  WaterfallCard,
+} from './WaterfallCard';
 
 const photo = {
   id: 'one',
@@ -16,7 +22,10 @@ const photo = {
 class MockIntersectionObserver {
   static instances: MockIntersectionObserver[] = [];
 
-  constructor(public callback: IntersectionObserverCallback) {
+  constructor(
+    public callback: IntersectionObserverCallback,
+    public options?: IntersectionObserverInit,
+  ) {
     MockIntersectionObserver.instances.push(this);
   }
 
@@ -31,18 +40,20 @@ class MockIntersectionObserver {
 
 beforeEach(() => {
   MockIntersectionObserver.instances = [];
+  resetPreloadedImages();
   vi.stubGlobal('IntersectionObserver', MockIntersectionObserver);
 });
 
 afterEach(() => {
+  resetPreloadedImages();
   vi.unstubAllGlobals();
 });
 
 describe('WaterfallCard', () => {
-  it('reserves layout using the photo aspect ratio before the image loads', () => {
+  it('uses a larger viewport preload margin for card images', () => {
     render(<WaterfallCard photo={photo} onOpen={vi.fn()} />);
 
-    expect(screen.getByTestId('waterfall-card-frame')).toHaveStyle({ aspectRatio: '1200 / 800' });
+    expect(MockIntersectionObserver.instances[0]?.options?.rootMargin).toBe('1200px 0px');
   });
 
   it('does not mount the image until the observer reports the card is visible', () => {
@@ -104,7 +115,51 @@ describe('WaterfallCard', () => {
     expect(secondImage).toHaveClass('opacity-0');
   });
 
-  it('keeps the image mounted after it has been revealed once', () => {
+  it('reuses a cached image url for the same photo id across sources', () => {
+    cachePhotoImageForTest('one', 'https://r2.example.com/one.jpg');
+
+    render(
+      <WaterfallCard
+        photo={{
+          ...photo,
+          url: 'https://qiniu.example.com/one.jpg',
+          thumbnailUrl: 'https://qiniu.example.com/one.jpg',
+        }}
+        onOpen={vi.fn()}
+      />,
+    );
+
+    act(() => {
+      MockIntersectionObserver.instances[0]?.trigger(true);
+    });
+
+    expect(screen.getByRole('img', { name: 'one.jpg' })).toHaveAttribute('src', 'https://r2.example.com/one.jpg');
+  });
+
+  it('updates the cached image url after the new source finishes loading', () => {
+    cachePhotoImageForTest('one', 'https://r2.example.com/one.jpg');
+
+    render(
+      <WaterfallCard
+        photo={{
+          ...photo,
+          url: 'https://qiniu.example.com/one.jpg',
+          thumbnailUrl: 'https://qiniu.example.com/one.jpg',
+        }}
+        onOpen={vi.fn()}
+      />,
+    );
+
+    act(() => {
+      MockIntersectionObserver.instances[0]?.trigger(true);
+    });
+
+    fireEvent.load(screen.getByRole('img', { name: 'one.jpg' }));
+
+    expect(getCachedPhotoImageUrl('one')).toBe('https://r2.example.com/one.jpg');
+  });
+
+  it('keeps the image mounted after the card leaves the observed range once it has started loading', () => {
     render(<WaterfallCard photo={photo} onOpen={vi.fn()} />);
 
     act(() => {
@@ -118,5 +173,28 @@ describe('WaterfallCard', () => {
     });
 
     expect(screen.getByRole('img', { name: 'one.jpg' })).toBeInTheDocument();
+  });
+
+  it('uses eager loading and high fetch priority for preloaded cards', () => {
+    render(<WaterfallCard photo={photo} onOpen={vi.fn()} shouldPreload />);
+
+    act(() => {
+      MockIntersectionObserver.instances[0]?.trigger(true);
+    });
+
+    expect(screen.getByRole('img', { name: 'one.jpg' })).toHaveAttribute('loading', 'eager');
+    expect(screen.getByRole('img', { name: 'one.jpg' })).toHaveAttribute('fetchpriority', 'high');
+  });
+
+  it('reveals a preloaded image immediately after it mounts', () => {
+    markImageAsPreloadedForTest(photo.thumbnailUrl);
+
+    render(<WaterfallCard photo={photo} onOpen={vi.fn()} shouldPreload />);
+
+    act(() => {
+      MockIntersectionObserver.instances[0]?.trigger(true);
+    });
+
+    expect(screen.getByRole('img', { name: 'one.jpg' })).toHaveClass('opacity-100');
   });
 });

@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import type { GalleryColumnPreference } from '../../utils/gallerySettings';
+import { clampGalleryColumnCount } from '../../utils/gallerySettings';
 import type { Photo } from '../../types/photo';
-import type { GalleryColumnPreference } from './GallerySettingsModal';
 import { WaterfallCard } from './WaterfallCard';
 
 type WaterfallGalleryProps = {
@@ -26,11 +27,11 @@ export function getAutoColumnCount(viewportWidth: number) {
 }
 
 export function resolveColumnCount(viewportWidth: number, columnPreference: GalleryColumnPreference) {
-  return columnPreference === 'auto' ? getAutoColumnCount(viewportWidth) : columnPreference;
+  return columnPreference === 'auto' ? getAutoColumnCount(viewportWidth) : clampGalleryColumnCount(columnPreference);
 }
 
 export function distributePhotosIntoColumns(photos: Photo[], columnCount: number) {
-  const safeColumnCount = Math.max(columnCount, 1);
+  const safeColumnCount = clampGalleryColumnCount(columnCount);
   const columns = Array.from({ length: safeColumnCount }, () => [] as Photo[]);
   const columnHeights = Array.from({ length: safeColumnCount }, () => 0);
 
@@ -56,10 +57,45 @@ export function distributePhotosIntoColumns(photos: Photo[], columnCount: number
   return columns;
 }
 
+export function getPreloadWindowSize(columnCount: number) {
+  return columnCount <= 2 ? 4 : 6;
+}
+
+export function getPreloadPhotoIds(columns: Photo[][], seenPhotoIds: Set<string>, limit: number) {
+  if (limit <= 0) {
+    return [];
+  }
+
+  const preloadPhotoIds: string[] = [];
+
+  for (let offset = 0; offset < 2; offset += 1) {
+    for (const column of columns) {
+      let seenPrefixLength = 0;
+
+      while (seenPrefixLength < column.length && seenPhotoIds.has(column[seenPrefixLength]?.id ?? '')) {
+        seenPrefixLength += 1;
+      }
+
+      if (seenPrefixLength === 0) {
+        continue;
+      }
+
+      const nextPhoto = column[seenPrefixLength + offset];
+
+      if (nextPhoto !== undefined) {
+        preloadPhotoIds.push(nextPhoto.id);
+      }
+    }
+  }
+
+  return Array.from(new Set(preloadPhotoIds)).slice(0, limit);
+}
+
 export function WaterfallGallery({ photos, columnPreference, onOpen }: WaterfallGalleryProps) {
   const [viewportWidth, setViewportWidth] = useState(() =>
     typeof window === 'undefined' ? 1280 : window.innerWidth,
   );
+  const [seenPhotoIds, setSeenPhotoIds] = useState<Set<string>>(() => new Set());
 
   useEffect(() => {
     const handleResize = () => {
@@ -83,6 +119,42 @@ export function WaterfallGallery({ photos, columnPreference, onOpen }: Waterfall
     [photos, resolvedColumnCount],
   );
 
+  useEffect(() => {
+    const currentPhotoIds = new Set(photos.map((photo) => photo.id));
+
+    setSeenPhotoIds((current) => {
+      let changed = false;
+      const next = new Set<string>();
+
+      for (const photoId of current) {
+        if (currentPhotoIds.has(photoId)) {
+          next.add(photoId);
+        } else {
+          changed = true;
+        }
+      }
+
+      return changed ? next : current;
+    });
+  }, [photos]);
+
+  const handlePhotoEnterViewport = useCallback((photoId: string) => {
+    setSeenPhotoIds((current) => {
+      if (current.has(photoId)) {
+        return current;
+      }
+
+      const next = new Set(current);
+      next.add(photoId);
+      return next;
+    });
+  }, []);
+
+  const preloadPhotoIds = useMemo(
+    () => new Set(getPreloadPhotoIds(columns, seenPhotoIds, getPreloadWindowSize(resolvedColumnCount))),
+    [columns, resolvedColumnCount, seenPhotoIds],
+  );
+
   return (
     <div
       className="grid items-start gap-2"
@@ -93,7 +165,13 @@ export function WaterfallGallery({ photos, columnPreference, onOpen }: Waterfall
       {columns.map((columnPhotos, columnIndex) => (
         <div key={`column-${columnIndex}`} className="flex flex-col gap-2" data-testid={`waterfall-column-${columnIndex}`}>
           {columnPhotos.map((photo) => (
-            <WaterfallCard key={photo.id} photo={photo} onOpen={onOpen} />
+            <WaterfallCard
+              key={photo.id}
+              photo={photo}
+              onOpen={onOpen}
+              shouldPreload={preloadPhotoIds.has(photo.id)}
+              onEnterViewport={handlePhotoEnterViewport}
+            />
           ))}
         </div>
       ))}

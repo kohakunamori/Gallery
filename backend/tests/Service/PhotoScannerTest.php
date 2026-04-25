@@ -20,6 +20,7 @@ final class PhotoScannerTest extends TestCase
         file_put_contents($directory . '/root.jpg', 'root');
         file_put_contents($directory . '/travel/cover.png', 'cover');
         file_put_contents($directory . '/family/portrait.webp', 'portrait');
+        file_put_contents($directory . '/family/lossless.avif', 'lossless');
         file_put_contents($directory . '/travel/day-1/deep.jpeg', 'deep');
         file_put_contents($directory . '/notes.txt', 'notes');
         file_put_contents($directory . '/family/skip.gif', 'skip');
@@ -36,6 +37,10 @@ final class PhotoScannerTest extends TestCase
 
         self::assertSame(
             [
+                [
+                    'absolutePath' => str_replace('\\', '/', $directory . '/family/lossless.avif'),
+                    'relativePath' => 'family/lossless.avif',
+                ],
                 [
                     'absolutePath' => str_replace('\\', '/', $directory . '/family/portrait.webp'),
                     'relativePath' => 'family/portrait.webp',

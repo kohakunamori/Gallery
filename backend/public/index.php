@@ -6,14 +6,20 @@ use Gallery\Service\FilePhotoCache;
 
 require __DIR__ . '/../vendor/autoload.php';
 
-$mediaBaseUrl = 'https://static.cf.nyaneko.cn/gallery';
+$config = require dirname(__DIR__) . '/config/app.php';
+$qiniuConfig = $config['qiniu'];
 
 $app = createApp(
-    dirname(__DIR__, 2) . '/storage/photos',
-    $mediaBaseUrl,
-    new FilePhotoCache(dirname(__DIR__) . '/var/cache'),
-    false,
-    '/media',
+    $config['photosDirectory'],
+    $config['mediaBaseUrl'],
+    new FilePhotoCache($config['cacheDirectory']),
+    $config['displayErrorDetails'],
+    $config['localMediaBaseUrl'],
+    $qiniuConfig['mediaBaseUrl'],
+    $qiniuConfig['accessKey'],
+    $qiniuConfig['secretKey'],
+    $qiniuConfig['bucket'],
+    $qiniuConfig['domain'],
 );
 
 $app->run();

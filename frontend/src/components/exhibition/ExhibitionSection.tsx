@@ -1,5 +1,5 @@
 import type { Photo } from '../../types/photo';
-import type { GalleryColumnPreference } from './GallerySettingsModal';
+import type { GalleryColumnPreference } from '../../utils/gallerySettings';
 import { WaterfallGallery } from './WaterfallGallery';
 
 type ExhibitionSectionProps = {

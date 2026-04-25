@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { sortPhotos } from './sortPhotos';
 
 const photos = [
@@ -35,6 +35,10 @@ const photos = [
 ];
 
 describe('sortPhotos', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it('sorts newest first by default mode', () => {
     expect(sortPhotos(photos, 'newest').map((photo) => photo.id)).toEqual(['a', 'b', 'c']);
   });
@@ -49,5 +53,13 @@ describe('sortPhotos', () => {
 
   it('sorts filename descending', () => {
     expect(sortPhotos(photos, 'filename-desc').map((photo) => photo.id)).toEqual(['c', 'b', 'a']);
+  });
+
+  it('keeps month groups newest first while shuffling photos within each month', () => {
+    vi.spyOn(Math, 'random')
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0.9);
+
+    expect(sortPhotos(photos, 'random').map((photo) => photo.id)).toEqual(['b', 'a', 'c']);
   });
 });

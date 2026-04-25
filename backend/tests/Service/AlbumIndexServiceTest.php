@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace Gallery\Tests\Service;
 
 use Gallery\Service\AlbumIndexService;
+use Gallery\Service\MediaSourceAvailabilityService;
 use Gallery\Service\PhotoMetadataReaderInterface;
 use Gallery\Service\PhotoScannerInterface;
+use Gallery\Service\QiniuUsageService;
 use PHPUnit\Framework\TestCase;
 
 final class AlbumIndexServiceTest extends TestCase
@@ -134,5 +136,73 @@ final class AlbumIndexServiceTest extends TestCase
         $service = new AlbumIndexService($scanner, $metadataReader, $directory, '/media');
 
         self::assertSame([], $service->all());
+    }
+
+    public function test_it_builds_qiniu_album_cover_urls_when_qiniu_is_available(): void
+    {
+        $directory = sys_get_temp_dir() . '/gallery-albums-' . bin2hex(random_bytes(4));
+        mkdir($directory . '/travel', 0777, true);
+
+        $photo = $directory . '/travel/newest shot.jpg';
+        file_put_contents($photo, 'qiniu-album');
+        touch($photo, strtotime('2026-03-31 12:00:00 UTC'));
+
+        $scanner = new class($photo) implements PhotoScannerInterface {
+            public function __construct(private readonly string $photo)
+            {
+            }
+
+            public function scan(string $directory): array
+            {
+                return [
+                    [
+                        'absolutePath' => $this->photo,
+                        'relativePath' => 'travel/newest shot.jpg',
+                    ],
+                ];
+            }
+        };
+
+        $metadataReader = new class implements PhotoMetadataReaderInterface {
+            public function read(string $path): array
+            {
+                return ['takenAt' => null, 'width' => 1200, 'height' => 800];
+            }
+        };
+
+        $qiniuUsageService = new QiniuUsageService(
+            'ak',
+            'sk',
+            'bucket',
+            'cdn.example.com',
+            'api.qiniuapi.com',
+            null,
+            900,
+            10 * 1024 * 1024 * 1024,
+            static fn (string $requestTarget, array $headers): string => json_encode([
+                [
+                    'values' => [
+                        'flow' => 1024,
+                    ],
+                ],
+            ], JSON_THROW_ON_ERROR),
+        );
+        $availabilityService = new MediaSourceAvailabilityService([
+            'r2' => 'https://r2.example.com/gallery',
+            'qiniu' => 'https://qiniu.example.com/gallery',
+            'local' => '/media',
+        ], $qiniuUsageService);
+        $service = new AlbumIndexService(
+            $scanner,
+            $metadataReader,
+            $directory,
+            'https://r2.example.com/gallery',
+            '/media',
+            $availabilityService,
+        );
+
+        $items = $service->all('qiniu');
+
+        self::assertSame('https://qiniu.example.com/gallery/travel/newest%20shot.jpg', $items[0]['coverUrl']);
     }
 }

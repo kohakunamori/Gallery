@@ -48,6 +48,19 @@ describe('groupPhotosByMonth', () => {
     ]);
   });
 
+  it('keeps month groups ordered newest first even when input order crosses months', () => {
+    expect(groupPhotosByMonth([photos[2], photos[0], photos[1]])).toEqual([
+      {
+        title: 'March 2026',
+        photos: [photos[0], photos[1]],
+      },
+      {
+        title: 'February 2026',
+        photos: [photos[2]],
+      },
+    ]);
+  });
+
   it('returns an empty array when no photos are provided', () => {
     expect(groupPhotosByMonth([])).toEqual([]);
   });

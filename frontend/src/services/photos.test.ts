@@ -22,11 +22,12 @@ describe('fetchPhotos', () => {
       ok: true,
       json: async () => ({ items: [samplePhoto] }),
     });
+    const controller = new AbortController();
 
     vi.stubGlobal('fetch', fetchMock);
 
-    await expect(fetchPhotos('r2')).resolves.toEqual([samplePhoto]);
-    expect(fetchMock).toHaveBeenCalledWith('/api/photos?mediaSource=r2');
+    await expect(fetchPhotos('r2', controller.signal)).resolves.toEqual([samplePhoto]);
+    expect(fetchMock).toHaveBeenCalledWith('/api/photos?mediaSource=r2', { signal: controller.signal });
   });
 
   it('throws on non-ok responses', async () => {
@@ -39,5 +40,18 @@ describe('fetchPhotos', () => {
     );
 
     await expect(fetchPhotos('local')).rejects.toThrow('Request failed with status 500');
+  });
+
+  it('passes through an omitted abort signal', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [samplePhoto] }),
+    });
+
+    vi.stubGlobal('fetch', fetchMock);
+
+    await fetchPhotos('r2');
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/photos?mediaSource=r2', { signal: undefined });
   });
 });

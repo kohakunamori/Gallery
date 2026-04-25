@@ -9,7 +9,7 @@ use UnexpectedValueException;
 
 final class PhotoScanner implements PhotoScannerInterface
 {
-    private const SUPPORTED_EXTENSIONS = ['jpg', 'jpeg', 'png', 'webp'];
+    private const SUPPORTED_EXTENSIONS = ['jpg', 'jpeg', 'png', 'webp', 'avif'];
 
     public function scan(string $directory): array
     {

@@ -4,6 +4,10 @@ import type { GallerySortPreference } from '../components/exhibition/GallerySett
 export function sortPhotos(photos: Photo[], sortPreference: GallerySortPreference) {
   const sortedPhotos = [...photos];
 
+  if (sortPreference === 'random') {
+    return shufflePhotosWithinMonths(sortedPhotos);
+  }
+
   sortedPhotos.sort((left, right) => {
     switch (sortPreference) {
       case 'oldest': {
@@ -23,6 +27,38 @@ export function sortPhotos(photos: Photo[], sortPreference: GallerySortPreferenc
   });
 
   return sortedPhotos;
+}
+
+function shufflePhotosWithinMonths(photos: Photo[]) {
+  const newestFirst = [...photos].sort(comparePhotosByDateDescending);
+  const groups: Photo[][] = [];
+  let currentMonthKey: string | null = null;
+
+  for (const photo of newestFirst) {
+    const monthKey = photo.sortTime.slice(0, 7);
+
+    if (monthKey !== currentMonthKey) {
+      groups.push([]);
+      currentMonthKey = monthKey;
+    }
+
+    groups[groups.length - 1]?.push(photo);
+  }
+
+  return groups.flatMap((group) => {
+    const shuffledGroup = [...group];
+    shufflePhotos(shuffledGroup);
+    return shuffledGroup;
+  });
+}
+
+function shufflePhotos(photos: Photo[]) {
+  for (let index = photos.length - 1; index > 0; index -= 1) {
+    const randomIndex = Math.floor(Math.random() * (index + 1));
+    const currentPhoto = photos[index];
+    photos[index] = photos[randomIndex];
+    photos[randomIndex] = currentPhoto;
+  }
 }
 
 function comparePhotosByDateAscending(left: Photo, right: Photo) {

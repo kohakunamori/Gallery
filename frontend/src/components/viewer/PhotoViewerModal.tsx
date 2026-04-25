@@ -1,6 +1,7 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react';
 import type { Photo } from '../../types/photo';
+import { getCachedPhotoImageUrl, markPhotoImageAsLoaded, preloadPhotoImage } from '../exhibition/WaterfallCard';
 
 type PhotoViewerModalProps = {
   photos: Photo[];
@@ -22,6 +23,33 @@ export function PhotoViewerModal({ photos, selectedIndex, onSelectIndex, onClose
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const previouslyFocusedElementRef = useRef<HTMLElement | null>(null);
+  const photo = photos[selectedIndex];
+  const [displayedImageUrl, setDisplayedImageUrl] = useState(() => (photo ? getCachedPhotoImageUrl(photo.id) ?? photo.url : ''));
+
+  useEffect(() => {
+    if (photo === undefined) {
+      return;
+    }
+
+    setDisplayedImageUrl(getCachedPhotoImageUrl(photo.id) ?? photo.url);
+  }, [photo?.id, photo?.url]);
+
+  useEffect(() => {
+    if (photo === undefined) {
+      return;
+    }
+
+    const previousPhoto = photos[selectedIndex - 1];
+    const nextPhoto = photos[selectedIndex + 1];
+
+    if (previousPhoto !== undefined) {
+      preloadPhotoImage(previousPhoto.id, previousPhoto.url);
+    }
+
+    if (nextPhoto !== undefined) {
+      preloadPhotoImage(nextPhoto.id, nextPhoto.url);
+    }
+  }, [photo, photos, selectedIndex]);
 
   useEffect(() => {
     previouslyFocusedElementRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -32,11 +60,10 @@ export function PhotoViewerModal({ photos, selectedIndex, onSelectIndex, onClose
     };
   }, []);
 
-  if (selectedIndex < 0 || selectedIndex >= photos.length) {
+  if (selectedIndex < 0 || selectedIndex >= photos.length || photo === undefined) {
     return null;
   }
 
-  const photo = photos[selectedIndex];
   const isFirstPhoto = selectedIndex === 0;
   const isLastPhoto = selectedIndex === photos.length - 1;
 
@@ -127,7 +154,19 @@ export function PhotoViewerModal({ photos, selectedIndex, onSelectIndex, onClose
       </button>
 
       <div className="flex max-h-full max-w-6xl flex-col items-center gap-4" onClick={(event) => event.stopPropagation()}>
-        <img src={photo.url} alt={photo.filename} className="max-h-[80vh] max-w-full object-contain" />
+        <img
+          src={displayedImageUrl}
+          alt={photo.filename}
+          className="max-h-[80vh] max-w-full object-contain"
+          onLoad={() => {
+            markPhotoImageAsLoaded(photo.id, displayedImageUrl);
+          }}
+          onError={() => {
+            if (displayedImageUrl !== photo.url) {
+              setDisplayedImageUrl(photo.url);
+            }
+          }}
+        />
         <p className="text-sm text-white/70">
           {selectedIndex + 1} / {photos.length}
         </p>

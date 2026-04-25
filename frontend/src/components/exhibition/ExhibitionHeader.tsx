@@ -48,7 +48,7 @@ export function ExhibitionHeader({ isAtTop, isVisible, onOpenSettings }: Exhibit
                 />
                 <circle cx="10" cy="10" r="2.1" />
               </svg>
-              <span>Settings</span>
+              <span className="hidden md:inline">Settings</span>
             </button>
           </div>
         </div>

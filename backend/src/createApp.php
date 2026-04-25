@@ -3,13 +3,16 @@
 declare(strict_types=1);
 
 use Gallery\Action\GetAlbumsAction;
+use Gallery\Action\GetMediaSourceStatusAction;
 use Gallery\Action\GetPhotosAction;
 use Gallery\Service\AlbumIndexService;
+use Gallery\Service\MediaSourceAvailabilityService;
 use Gallery\Service\NullPhotoCache;
 use Gallery\Service\PhotoCacheInterface;
 use Gallery\Service\PhotoIndexService;
 use Gallery\Service\PhotoMetadataReader;
 use Gallery\Service\PhotoScanner;
+use Gallery\Service\QiniuUsageService;
 use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
 use Slim\Factory\AppFactory;
@@ -21,10 +24,41 @@ function createApp(
     ?PhotoCacheInterface $cache = null,
     bool $displayErrorDetails = false,
     string $localMediaBaseUrl = '/media',
+    ?string $qiniuMediaBaseUrl = null,
+    ?string $qiniuAccessKey = null,
+    ?string $qiniuSecretKey = null,
+    ?string $qiniuBucket = null,
+    ?string $qiniuDomain = null,
 ): \Slim\App {
     $app = AppFactory::create();
     $scanner = new PhotoScanner();
     $metadataReader = new PhotoMetadataReader();
+    $mediaBaseUrls = [
+        'r2' => $mediaBaseUrl,
+        'qiniu' => $qiniuMediaBaseUrl ?? '',
+        'local' => $localMediaBaseUrl,
+    ];
+    $qiniuUsageService = null;
+
+    if (
+        $qiniuAccessKey !== null
+        && $qiniuSecretKey !== null
+        && $qiniuBucket !== null
+        && $qiniuMediaBaseUrl !== null
+        && $qiniuMediaBaseUrl !== ''
+    ) {
+        $cacheDirectory = dirname(__DIR__) . '/var/cache';
+        $qiniuUsageService = new QiniuUsageService(
+            $qiniuAccessKey,
+            $qiniuSecretKey,
+            $qiniuBucket,
+            $qiniuDomain,
+            'api.qiniuapi.com',
+            rtrim($cacheDirectory, '/\\') . DIRECTORY_SEPARATOR . 'qiniu-usage.json',
+        );
+    }
+
+    $mediaSourceAvailabilityService = new MediaSourceAvailabilityService($mediaBaseUrls, $qiniuUsageService);
 
     $photoIndexService = new PhotoIndexService(
         $scanner,
@@ -34,6 +68,7 @@ function createApp(
         $cache ?? new NullPhotoCache(),
         15,
         $localMediaBaseUrl,
+        $mediaSourceAvailabilityService,
     );
 
     $albumIndexService = new AlbumIndexService(
@@ -42,6 +77,7 @@ function createApp(
         $photosDirectory,
         $mediaBaseUrl,
         $localMediaBaseUrl,
+        $mediaSourceAvailabilityService,
     );
 
     $app->addRoutingMiddleware();
@@ -65,8 +101,9 @@ function createApp(
         return $response;
     });
 
-    $app->get('/api/photos', new GetPhotosAction($photoIndexService));
-    $app->get('/api/albums', new GetAlbumsAction($albumIndexService));
+    $app->get('/api/photos', new GetPhotosAction($photoIndexService, $mediaSourceAvailabilityService));
+    $app->get('/api/albums', new GetAlbumsAction($albumIndexService, $mediaSourceAvailabilityService));
+    $app->get('/api/media-sources', new GetMediaSourceStatusAction($mediaSourceAvailabilityService));
 
     $app->get('/media/{path:.*}', static function (Request $request, Response $response, array $args) use ($photosDirectory): Response {
         $relativePath = trim((string) ($args['path'] ?? ''), '/');
@@ -81,7 +118,41 @@ function createApp(
             return $response->withStatus(404);
         }
 
-        $mimeType = mime_content_type($path) ?: 'application/octet-stream';
+        $modifiedAt = @filemtime($path);
+        $size = @filesize($path);
+
+        if ($modifiedAt === false || $size === false) {
+            return $response->withStatus(404);
+        }
+
+        $etag = sprintf('"%x-%x"', $modifiedAt, $size);
+        $lastModified = gmdate('D, d M Y H:i:s', $modifiedAt) . ' GMT';
+        $response = $response
+            ->withHeader('Cache-Control', 'public, max-age=315360000, immutable')
+            ->withHeader('ETag', $etag)
+            ->withHeader('Last-Modified', $lastModified);
+
+        if ($request->getHeaderLine('If-None-Match') === $etag) {
+            return $response->withStatus(304);
+        }
+
+        $ifModifiedSince = $request->getHeaderLine('If-Modified-Since');
+        $ifModifiedSinceTime = $ifModifiedSince === '' ? false : strtotime($ifModifiedSince);
+
+        if ($ifModifiedSinceTime !== false && $ifModifiedSinceTime >= $modifiedAt) {
+            return $response->withStatus(304);
+        }
+
+        $mimeType = mime_content_type($path) ?: '';
+        $extension = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+
+        if ($extension === 'avif' && !str_starts_with($mimeType, 'image/')) {
+            $mimeType = 'image/avif';
+        }
+
+        if ($mimeType === '') {
+            $mimeType = 'application/octet-stream';
+        }
         $stream = fopen($path, 'rb');
 
         if ($stream === false) {
@@ -100,7 +171,7 @@ function createApp(
 
         return $response
             ->withHeader('Content-Type', $mimeType)
-            ->withHeader('Content-Length', (string) filesize($path));
+            ->withHeader('Content-Length', (string) $size);
     });
 
     return $app;

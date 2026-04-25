@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { distributePhotosIntoColumns, resolveColumnCount } from './WaterfallGallery';
+import { distributePhotosIntoColumns, getPreloadPhotoIds, getPreloadWindowSize, resolveColumnCount } from './WaterfallGallery';
 
 const photos = [
   {
@@ -51,6 +51,13 @@ describe('WaterfallGallery helpers', () => {
     expect(resolveColumnCount(1200, 'auto')).toBe(3);
     expect(resolveColumnCount(1600, 'auto')).toBe(4);
     expect(resolveColumnCount(1200, 2)).toBe(2);
+    expect(resolveColumnCount(1200, 6)).toBe(6);
+  });
+
+  it('clamps fixed column counts into the supported range', () => {
+    expect(resolveColumnCount(1200, 0)).toBe(1);
+    expect(resolveColumnCount(1200, 99)).toBe(8);
+    expect(distributePhotosIntoColumns(photos, 99)).toHaveLength(8);
   });
 
   it('distributes photos into deterministic columns', () => {
@@ -74,5 +81,25 @@ describe('WaterfallGallery helpers', () => {
       ['one', 'four'],
       ['two', 'three'],
     ]);
+  });
+
+  it('uses a larger preload window sized by column count', () => {
+    expect(getPreloadWindowSize(1)).toBe(4);
+    expect(getPreloadWindowSize(2)).toBe(4);
+    expect(getPreloadWindowSize(3)).toBe(6);
+    expect(getPreloadWindowSize(4)).toBe(6);
+  });
+
+  it('preloads the next two unseen photos from each column after visible cards are seen', () => {
+    const columns = distributePhotosIntoColumns(photos, 2);
+
+    expect(getPreloadPhotoIds(columns, new Set(['one', 'two']), 4)).toEqual(['four', 'three']);
+  });
+
+  it('does not preload from untouched columns or beyond the cap', () => {
+    const columns = distributePhotosIntoColumns(photos, 2);
+
+    expect(getPreloadPhotoIds(columns, new Set(['one']), 4)).toEqual(['four']);
+    expect(getPreloadPhotoIds(columns, new Set(['one', 'two']), 1)).toEqual(['four']);
   });
 });

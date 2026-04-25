@@ -17,6 +17,7 @@ final class PhotoIndexService
         private readonly ?PhotoCacheInterface $cache = null,
         private readonly int $cacheTtlSeconds = 15,
         private readonly string $localMediaBaseUrl = '/media',
+        private readonly ?MediaSourceAvailabilityService $mediaSourceAvailabilityService = null,
     ) {
     }
 
@@ -58,10 +59,11 @@ final class PhotoIndexService
                 ?? (new DateTimeImmutable('@' . (string) $modifiedAt))
                     ->setTimezone(new DateTimeZone('UTC'))
                     ->format(DATE_ATOM);
-            $url = rtrim($mediaBaseUrl, '/') . '/' . $this->encodeRelativePath($relativePath);
+            $version = sha1($relativePath . '|' . (string) $modifiedAt);
+            $url = $this->buildVersionedMediaUrl($mediaBaseUrl, $relativePath, $version);
 
             $items[] = [
-                'id' => sha1($relativePath . '|' . (string) $modifiedAt),
+                'id' => $version,
                 'filename' => $filename,
                 'url' => $url,
                 'thumbnailUrl' => $url,
@@ -86,7 +88,19 @@ final class PhotoIndexService
 
     private function resolveMediaBaseUrl(string $mediaSource): string
     {
+        if ($this->mediaSourceAvailabilityService !== null) {
+            return $this->mediaSourceAvailabilityService->resolveMediaBaseUrl($mediaSource);
+        }
+
         return $mediaSource === 'local' ? $this->localMediaBaseUrl : $this->defaultMediaBaseUrl;
+    }
+
+    private function buildVersionedMediaUrl(string $mediaBaseUrl, string $relativePath, string $version): string
+    {
+        $url = rtrim($mediaBaseUrl, '/') . '/' . $this->encodeRelativePath($relativePath);
+        $separator = str_contains($url, '?') ? '&' : '?';
+
+        return $url . $separator . 'v=' . rawurlencode($version);
     }
 
     private function encodeRelativePath(string $relativePath): string

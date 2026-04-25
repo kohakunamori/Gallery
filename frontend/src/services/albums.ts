@@ -1,7 +1,7 @@
-import type { GalleryMediaSourcePreference } from '../components/exhibition/GallerySettingsModal';
+import type { GalleryConcreteMediaSource } from '../utils/gallerySettings';
 import type { Album } from '../types/album';
 
-export async function fetchAlbums(mediaSource: GalleryMediaSourcePreference): Promise<Album[]> {
+export async function fetchAlbums(mediaSource: GalleryConcreteMediaSource): Promise<Album[]> {
   const response = await fetch(`/api/albums?mediaSource=${encodeURIComponent(mediaSource)}`);
 
   if (!response.ok) {

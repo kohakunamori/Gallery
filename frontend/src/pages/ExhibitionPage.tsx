@@ -3,39 +3,145 @@ import { ExhibitionHeader } from '../components/exhibition/ExhibitionHeader';
 import { ExhibitionHero } from '../components/exhibition/ExhibitionHero';
 import { ExhibitionSection } from '../components/exhibition/ExhibitionSection';
 import { GallerySettingsModal } from '../components/exhibition/GallerySettingsModal';
+import {
+  normalizeGalleryMediaSourcePreference,
+  readGallerySettings,
+  writeGallerySettings,
+} from '../utils/gallerySettings';
 import type {
   GalleryColumnPreference,
+  GalleryConcreteMediaSource,
   GalleryMediaSourcePreference,
   GallerySortPreference,
-} from '../components/exhibition/GallerySettingsModal';
+} from '../utils/gallerySettings';
 import { LoadTrigger } from '../components/exhibition/LoadTrigger';
 import { PhotoViewerModal } from '../components/viewer/PhotoViewerModal';
 import { fetchPhotos } from '../services/photos';
+import { fetchMediaSourceStatuses } from '../services/mediaSources';
+import type { MediaSourceStatus } from '../services/mediaSources';
 import type { Photo } from '../types/photo';
 import { readSelectedPhotoId, writeSelectedPhotoId } from '../utils/photoQuery';
 import { groupPhotosByMonth } from '../utils/groupPhotosByMonth';
 import { sortPhotos } from '../utils/sortPhotos';
 
-const INITIAL_VISIBLE_COUNT = 18;
-const LOAD_MORE_COUNT = 12;
+const INITIAL_VISIBLE_COUNT = 24;
+const LOAD_MORE_COUNT = 24;
 const TOP_VISIBILITY_THRESHOLD = 24;
 const DOWNWARD_HIDE_THRESHOLD = 64;
 const UPWARD_REVEAL_THRESHOLD = 96;
+const AUTO_MEDIA_SOURCE_CANDIDATES: GalleryConcreteMediaSource[] = ['r2', 'qiniu'];
+const IMAGE_PROBE_TIMEOUT_MS = 3000;
+
+function getMediaSourceStatus(
+  mediaSourceStatuses: MediaSourceStatus[],
+  mediaSource: GalleryConcreteMediaSource,
+): MediaSourceStatus | undefined {
+  return mediaSourceStatuses.find((status) => status.source === mediaSource);
+}
+
+function getAutoMediaSourceStatusSignature(mediaSourceStatuses: MediaSourceStatus[]): string {
+  return AUTO_MEDIA_SOURCE_CANDIDATES.map((mediaSource) => {
+    const status = getMediaSourceStatus(mediaSourceStatuses, mediaSource);
+    return `${mediaSource}:${status?.isAvailable ?? false}:${status?.isDisabled ?? false}:${status?.status ?? 'unknown'}`;
+  }).join('|');
+}
+
+function isAbortError(error: unknown): error is DOMException {
+  return error instanceof DOMException && error.name === 'AbortError';
+}
+
+function isMediaSourceDisabled(mediaSourceStatuses: MediaSourceStatus[], mediaSource: GalleryConcreteMediaSource): boolean {
+  return getMediaSourceStatus(mediaSourceStatuses, mediaSource)?.isDisabled ?? false;
+}
+
+function probeImage(url: string, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException('The operation was aborted.', 'AbortError'));
+      return;
+    }
+
+    const image = new Image();
+    const timeoutId = window.setTimeout(() => {
+      cleanup();
+      reject(new Error(`Image probe timed out for ${url}`));
+    }, IMAGE_PROBE_TIMEOUT_MS);
+
+    const handleAbort = () => {
+      cleanup();
+      reject(new DOMException('The operation was aborted.', 'AbortError'));
+    };
+
+    const cleanup = () => {
+      window.clearTimeout(timeoutId);
+      image.onload = null;
+      image.onerror = null;
+      signal?.removeEventListener('abort', handleAbort);
+    };
+
+    image.onload = () => {
+      cleanup();
+      resolve();
+    };
+    image.onerror = () => {
+      cleanup();
+      reject(new Error(`Image probe failed for ${url}`));
+    };
+
+    signal?.addEventListener('abort', handleAbort, { once: true });
+    image.src = url;
+  });
+}
+
+async function resolveAutoMediaSourcePhotos(
+  mediaSourceStatuses: MediaSourceStatus[],
+  signal?: AbortSignal,
+): Promise<{ source: GalleryConcreteMediaSource; items: Photo[] }> {
+  for (const mediaSource of AUTO_MEDIA_SOURCE_CANDIDATES) {
+    if (isMediaSourceDisabled(mediaSourceStatuses, mediaSource)) {
+      continue;
+    }
+
+    try {
+      const items = await fetchPhotos(mediaSource, signal);
+
+      if (items.length === 0) {
+        return { source: mediaSource, items };
+      }
+
+      await probeImage(items[0].thumbnailUrl, signal);
+
+      return { source: mediaSource, items };
+    } catch (error: unknown) {
+      if (isAbortError(error)) {
+        throw error;
+      }
+    }
+  }
+
+  throw new Error('No reachable remote media source.');
+}
 
 export function ExhibitionPage() {
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [status, setStatus] = useState<'loading' | 'ready' | 'empty' | 'error'>('loading');
   const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_COUNT);
   const [selectedPhotoId, setSelectedPhotoId] = useState<string | null>(() => readSelectedPhotoId());
+  const persistedSettings = readGallerySettings();
   const [isAtTop, setIsAtTop] = useState(true);
   const [isHeaderVisible, setIsHeaderVisible] = useState(true);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [columnPreference, setColumnPreference] = useState<GalleryColumnPreference>('auto');
-  const [sortPreference, setSortPreference] = useState<GallerySortPreference>('newest');
-  const [mediaSourcePreference, setMediaSourcePreference] = useState<GalleryMediaSourcePreference>('r2');
+  const [columnPreference, setColumnPreference] = useState<GalleryColumnPreference>(persistedSettings.columnPreference);
+  const [sortPreference, setSortPreference] = useState<GallerySortPreference>(persistedSettings.sortPreference);
+  const [mediaSourcePreference, setMediaSourcePreference] = useState<GalleryMediaSourcePreference>(
+    normalizeGalleryMediaSourcePreference(persistedSettings.mediaSourcePreference),
+  );
+  const [mediaSourceStatuses, setMediaSourceStatuses] = useState<MediaSourceStatus[]>([]);
+  const [hasLoadedMediaSourceStatuses, setHasLoadedMediaSourceStatuses] = useState(false);
   const previousScrollYRef = useRef(0);
   const upwardRevealDistanceRef = useRef(0);
   const downwardHideDistanceRef = useRef(0);
+  const autoMediaSourceStatusSignature = getAutoMediaSourceStatusSignature(mediaSourceStatuses);
 
   useEffect(() => {
     const handleScroll = () => {
@@ -82,30 +188,95 @@ export function ExhibitionPage() {
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
+    const controller = new AbortController();
+
+    fetchMediaSourceStatuses(controller.signal)
+      .then((items) => {
+        setMediaSourceStatuses(items);
+        setHasLoadedMediaSourceStatuses(true);
+      })
+      .catch((error: unknown) => {
+        if (isAbortError(error)) {
+          return;
+        }
+
+        setHasLoadedMediaSourceStatuses(true);
+      });
+
+    return () => {
+      controller.abort();
+    };
+  }, []);
+
+  useEffect(() => {
+    const normalizedMediaSourcePreference = normalizeGalleryMediaSourcePreference(mediaSourcePreference);
+
+    if (normalizedMediaSourcePreference !== mediaSourcePreference) {
+      setMediaSourcePreference(normalizedMediaSourcePreference);
+      return;
+    }
+
+    if (!hasLoadedMediaSourceStatuses || mediaSourcePreference === 'auto') {
+      return;
+    }
+
+    const selectedSourceStatus = getMediaSourceStatus(mediaSourceStatuses, mediaSourcePreference);
+    const fallbackMediaSourcePreference = normalizeGalleryMediaSourcePreference('auto');
+
+    if (selectedSourceStatus?.isDisabled && mediaSourcePreference !== fallbackMediaSourcePreference) {
+      setMediaSourcePreference(fallbackMediaSourcePreference);
+    }
+  }, [hasLoadedMediaSourceStatuses, mediaSourcePreference, mediaSourceStatuses]);
+
+  useEffect(() => {
+    if ((mediaSourcePreference === 'auto' || mediaSourcePreference === 'qiniu') && !hasLoadedMediaSourceStatuses) {
+      return;
+    }
+
+    if (mediaSourcePreference !== 'auto' && isMediaSourceDisabled(mediaSourceStatuses, mediaSourcePreference)) {
+      return;
+    }
+
+    const controller = new AbortController();
 
     setStatus('loading');
     setVisibleCount(INITIAL_VISIBLE_COUNT);
 
-    fetchPhotos(mediaSourcePreference)
-      .then((items) => {
-        if (cancelled) {
+    const loadPhotos = async () => {
+      try {
+        const nextItems =
+          mediaSourcePreference === 'auto'
+            ? await resolveAutoMediaSourcePhotos(mediaSourceStatuses, controller.signal)
+            : {
+                source: mediaSourcePreference,
+                items: await fetchPhotos(mediaSourcePreference, controller.signal),
+              };
+
+        if (controller.signal.aborted) {
           return;
         }
 
-        setPhotos(items);
-        setStatus(items.length === 0 ? 'empty' : 'ready');
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setStatus('error');
+        setPhotos(nextItems.items);
+        setStatus(nextItems.items.length === 0 ? 'empty' : 'ready');
+      } catch (error: unknown) {
+        if (isAbortError(error)) {
+          return;
         }
-      });
+
+        setStatus('error');
+      }
+    };
+
+    void loadPhotos();
 
     return () => {
-      cancelled = true;
+      controller.abort();
     };
-  }, [mediaSourcePreference]);
+  }, [
+    mediaSourcePreference,
+    (mediaSourcePreference === 'auto' || mediaSourcePreference === 'qiniu') ? hasLoadedMediaSourceStatuses : false,
+    mediaSourcePreference === 'auto' ? autoMediaSourceStatusSignature : '',
+  ]);
 
   useEffect(() => {
     if (isSettingsOpen) {
@@ -113,9 +284,30 @@ export function ExhibitionPage() {
     }
   }, [isSettingsOpen]);
 
+  useEffect(() => {
+    writeGallerySettings({
+      columnPreference,
+      sortPreference,
+      mediaSourcePreference,
+    });
+  }, [columnPreference, sortPreference, mediaSourcePreference]);
+
   const sortedPhotos = useMemo(() => sortPhotos(photos, sortPreference), [photos, sortPreference]);
-  const visiblePhotos = useMemo(() => sortedPhotos.slice(0, visibleCount), [sortedPhotos, visibleCount]);
-  const groups = useMemo(() => groupPhotosByMonth(visiblePhotos), [visiblePhotos]);
+  const groups = useMemo(() => {
+    const allGroups = groupPhotosByMonth(sortedPhotos);
+    let remainingVisibleCount = visibleCount;
+
+    return allGroups.flatMap((group) => {
+      if (remainingVisibleCount <= 0) {
+        return [];
+      }
+
+      const visiblePhotos = group.photos.slice(0, remainingVisibleCount);
+      remainingVisibleCount -= visiblePhotos.length;
+
+      return visiblePhotos.length === 0 ? [] : [{ ...group, photos: visiblePhotos }];
+    });
+  }, [sortedPhotos, visibleCount]);
   const selectedIndex = sortedPhotos.findIndex((photo) => photo.id === selectedPhotoId);
 
   const hasMorePhotos = visibleCount < sortedPhotos.length;
@@ -177,7 +369,7 @@ export function ExhibitionPage() {
                   onOpen={openPhoto}
                 />
               ))}
-              <LoadTrigger disabled={false} isComplete={!hasMorePhotos} onLoadMore={loadMore} />
+              <LoadTrigger disabled={false} isComplete={!hasMorePhotos} onLoadMore={loadMore} resetKey={visibleCount} />
             </div>
           )}
         </section>
@@ -188,6 +380,7 @@ export function ExhibitionPage() {
           columnPreference={columnPreference}
           sortPreference={sortPreference}
           mediaSourcePreference={mediaSourcePreference}
+          mediaSourceStatuses={mediaSourceStatuses}
           onSelectColumnPreference={setColumnPreference}
           onSelectSortPreference={setSortPreference}
           onSelectMediaSourcePreference={setMediaSourcePreference}

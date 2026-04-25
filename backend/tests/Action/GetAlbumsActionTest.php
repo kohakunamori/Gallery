@@ -74,6 +74,22 @@ final class GetAlbumsActionTest extends TestCase
         );
     }
 
+    public function test_it_rejects_qiniu_media_source_when_unavailable(): void
+    {
+        $directory = sys_get_temp_dir() . '/gallery-albums-' . bin2hex(random_bytes(4));
+        mkdir($directory, 0777, true);
+
+        $app = createApp($directory, 'https://img.example.com', null, true, '/media');
+        $request = (new ServerRequestFactory())->createServerRequest('GET', '/api/albums?mediaSource=qiniu');
+        $response = $app->handle($request);
+
+        self::assertSame(409, $response->getStatusCode());
+        self::assertSame(
+            ['error' => 'Media source unavailable', 'mediaSource' => 'qiniu'],
+            json_decode((string) $response->getBody(), true, 512, JSON_THROW_ON_ERROR),
+        );
+    }
+
     public function test_it_returns_a_generic_json_500_payload_when_error_details_are_disabled(): void
     {
         $directory = sys_get_temp_dir() . '/gallery-albums-' . bin2hex(random_bytes(4));

@@ -15,6 +15,7 @@ final class AlbumIndexService
         private readonly string $photosDirectory,
         private readonly string $defaultMediaBaseUrl,
         private readonly string $localMediaBaseUrl = '/media',
+        private readonly ?MediaSourceAvailabilityService $mediaSourceAvailabilityService = null,
     ) {
     }
 
@@ -83,6 +84,10 @@ final class AlbumIndexService
 
     private function resolveMediaBaseUrl(string $mediaSource): string
     {
+        if ($this->mediaSourceAvailabilityService !== null) {
+            return $this->mediaSourceAvailabilityService->resolveMediaBaseUrl($mediaSource);
+        }
+
         return $mediaSource === 'local' ? $this->localMediaBaseUrl : $this->defaultMediaBaseUrl;
     }
 
