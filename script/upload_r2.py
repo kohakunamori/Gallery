@@ -86,6 +86,7 @@ class UploadRuntimeConfig:
     secret_key: str | None
     compression: str = COMPATIBILITY_COMPRESSION_MODE
     replace_remote_png: bool = False
+    replace_remote_avif: bool = False
 
 
 def get_upload_cache_semantics(prepared: PreparedUpload | None) -> tuple[bool, str | None]:
@@ -642,6 +643,14 @@ def is_target_synced(
     )
 
 
+def should_replace_existing_avif(config: UploadRuntimeConfig, compression_strategy: str | None) -> bool:
+    return config.replace_remote_avif and is_avif_compression_strategy(compression_strategy)
+
+
+def should_skip_existing_for_planned_upload(config: UploadRuntimeConfig, planned: PlannedUpload) -> bool:
+    return not should_replace_existing_avif(config, planned.compression_strategy)
+
+
 def plan_pending_uploads(
     files: list[Path],
     *,
@@ -662,7 +671,7 @@ def plan_pending_uploads(
             compression_strategy=compression_strategy,
         )
         for target_label in target_labels:
-            if not skip_existing:
+            if not skip_existing or should_replace_existing_avif(config, compression_strategy):
                 pending_by_target[target_label].append(planned)
                 continue
             target_id = get_target_cache_id(target_label, path, base_dir=base_dir, config=config)
@@ -1104,6 +1113,7 @@ def resolve_runtime_config(args) -> UploadRuntimeConfig:
         secret_key=secret_key,
         compression=compression,
         replace_remote_png=getattr(args, 'replace_remote_png', False),
+        replace_remote_avif=getattr(args, 'replace_remote_avif', False),
     )
 
 
@@ -3090,6 +3100,8 @@ def _print_preflight_summary(
     emit_message(f'目标：{" + ".join(active)}', log_callback)
     emit_message(f'模式：{"演练" if dry_run else "上传"}', log_callback)
     emit_message(f'跳过已存在文件：{"是" if skip_existing else "否"}', log_callback)
+    if config.replace_remote_avif:
+        emit_message('替换远端 AVIF：是', log_callback)
     for label in target_labels:
         name = target_names[label]
         pending = len(pending_by_target.get(label, []))
@@ -3193,8 +3205,9 @@ def run_upload(args, log_callback=None) -> int:
         if not pending_items:
             continue
         if label == 'r2':
+            r2_precheck_items = [item for item in pending_items if should_skip_existing_for_planned_upload(config, item)]
             existing_keys, confirmed, dirty = _precheck_object_store_target(
-                'r2', pending_items, config=config, folder=folder, files=files,
+                'r2', r2_precheck_items, config=config, folder=folder, files=files,
                 cache_data=cache_data, existing_keys=existing_keys,
                 skip_existing=skip_existing, dry_run=args.dry_run,
                 verify_remote=verify_remote, log_callback=log_callback,
@@ -3203,9 +3216,10 @@ def run_upload(args, log_callback=None) -> int:
             cache_dirty = cache_dirty or dirty
         elif label == 'linux':
             try:
+                linux_precheck_items = [item for item in pending_items if should_skip_existing_for_planned_upload(config, item)]
                 prechecked_paths, verified_linux_skip_results, confirmed, linux_precheck_completed, dirty = \
                     _precheck_linux_target(
-                        pending_items, config=config, folder=folder, cache_data=cache_data,
+                        linux_precheck_items, config=config, folder=folder, cache_data=cache_data,
                         skip_existing=skip_existing, dry_run=args.dry_run,
                         verify_remote=verify_remote, log_callback=log_callback,
                     )
@@ -3216,8 +3230,9 @@ def run_upload(args, log_callback=None) -> int:
             except RuntimeError:
                 return 1
         elif label == 'qiniu':
+            qiniu_precheck_items = [item for item in pending_items if should_skip_existing_for_planned_upload(config, item)]
             qiniu_existing_keys, confirmed, dirty = _precheck_object_store_target(
-                'qiniu', pending_items, config=config, folder=folder, files=files,
+                'qiniu', qiniu_precheck_items, config=config, folder=folder, files=files,
                 cache_data=cache_data, existing_keys=qiniu_existing_keys,
                 skip_existing=skip_existing, dry_run=args.dry_run,
                 verify_remote=verify_remote, log_callback=log_callback,
@@ -3238,7 +3253,7 @@ def run_upload(args, log_callback=None) -> int:
     if 'r2' in target_labels:
         for planned in pending_by_target.get('r2', []):
             object_key = build_object_key(planned.source_path, base_dir=folder, prefix=normalized_prefix, compression_strategy=planned.compression_strategy)
-            if existing_keys is not None and object_key in existing_keys:
+            if should_skip_existing_for_planned_upload(config, planned) and existing_keys is not None and object_key in existing_keys:
                 skipped_r2_results.append(
                     (planned.source_path, ('skipped', f'跳过 {planned.source_path.name} -> s3://{config.bucket}/{object_key}', planned.compressed, planned.compression_strategy))
                 )
@@ -3261,7 +3276,7 @@ def run_upload(args, log_callback=None) -> int:
     if 'linux' in target_labels:
         for planned in pending_by_target.get('linux', []):
             remote_path = build_linux_remote_path(planned.source_path, base_dir=folder, remote_dir=config.linux_dir or '', compression_strategy=planned.compression_strategy)
-            if existing_linux_paths is not None and remote_path in existing_linux_paths:
+            if should_skip_existing_for_planned_upload(config, planned) and existing_linux_paths is not None and remote_path in existing_linux_paths:
                 continue
             batch_linux_items.append(planned)
 
@@ -3270,7 +3285,7 @@ def run_upload(args, log_callback=None) -> int:
     if 'qiniu' in target_labels:
         for planned in pending_by_target.get('qiniu', []):
             object_key = build_object_key(planned.source_path, base_dir=folder, prefix=normalized_qiniu_prefix, compression_strategy=planned.compression_strategy)
-            if qiniu_existing_keys is not None and object_key in qiniu_existing_keys:
+            if should_skip_existing_for_planned_upload(config, planned) and qiniu_existing_keys is not None and object_key in qiniu_existing_keys:
                 skipped_qiniu_results.append(
                     (planned.source_path, ('skipped', f'跳过 {planned.source_path.name} -> qiniu://{config.qiniu_bucket}/{object_key}', planned.compressed, planned.compression_strategy))
                 )
@@ -3479,6 +3494,7 @@ def build_parser() -> argparse.ArgumentParser:
     common_group.add_argument('--sync-cache-only', action='store_true', help='仅同步本地缓存，不执行实际上传。')
     common_group.add_argument('--compression', choices=COMPRESSION_MODE_CHOICES, default=DEFAULT_COMPRESSION_MODE, help='上传前压缩方式，默认 avif-lossless。')
     common_group.add_argument('--replace-remote-png', action='store_true', help='AVIF 上传确认成功后删除同路径旧 PNG 文件。')
+    common_group.add_argument('--replace-remote-avif', action='store_true', help='即使同路径 AVIF 已存在也重新上传，用于替换旧有损 AVIF。')
     common_group.add_argument('--target', choices=('r2', 'linux', 'qiniu', 'all', 'both'), default='both', help='上传目标，默认 both。')
 
     r2_group = parser.add_argument_group('R2 参数')
