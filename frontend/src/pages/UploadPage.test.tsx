@@ -20,12 +20,18 @@ describe('UploadPage', () => {
     const avifFile = new File(['avif-body'], 'new art.avif', { type: 'image/avif' });
     const webpFile = new File(['webp-body'], 'batch.webp', { type: 'image/webp' });
 
-    mockedUploadPhotos.mockResolvedValue({
-      files: [
-        { name: 'new art.avif', path: 'uploads/new-art.avif', size: avifFile.size },
-        { name: 'batch.webp', path: 'uploads/batch.webp', size: webpFile.size },
-      ],
-      output: ['uploaded r2', 'uploaded qiniu'],
+    mockedUploadPhotos.mockImplementation(async (_files, options) => {
+      if (options !== undefined && !('aborted' in options)) {
+        options.onOutput?.('uploaded r2', 'stdout');
+      }
+
+      return {
+        files: [
+          { name: 'new art.avif', path: 'uploads/new-art.avif', size: avifFile.size },
+          { name: 'batch.webp', path: 'uploads/batch.webp', size: webpFile.size },
+        ],
+        output: ['uploaded r2', 'uploaded qiniu'],
+      };
     });
 
     render(<UploadPage />);
@@ -39,7 +45,7 @@ describe('UploadPage', () => {
     await user.click(screen.getByRole('button', { name: /Upload selected files/i }));
 
     await waitFor(() => {
-      expect(mockedUploadPhotos).toHaveBeenCalledWith([avifFile, webpFile]);
+      expect(mockedUploadPhotos).toHaveBeenCalledWith([avifFile, webpFile], expect.objectContaining({ onOutput: expect.any(Function) }));
     });
     expect(await screen.findByText('Upload complete')).toBeInTheDocument();
     expect(screen.getByText(/Saved as uploads\/new-art\.avif/i)).toBeInTheDocument();
@@ -58,11 +64,44 @@ describe('UploadPage', () => {
     expect(mockedUploadPhotos).not.toHaveBeenCalled();
   });
 
-  it('shows backend errors', async () => {
+  it('shows live script output while uploading', async () => {
+    const user = userEvent.setup();
+    const file = new File(['image-body'], 'source.webp', { type: 'image/webp' });
+    let resolveUpload: ((value: { files: []; output: string[] }) => void) | undefined;
+
+    mockedUploadPhotos.mockImplementation((_files, options) => {
+      if (options !== undefined && !('aborted' in options)) {
+        options.onOutput?.('streamed r2 line', 'stdout');
+      }
+
+      return new Promise((resolve) => {
+        resolveUpload = resolve;
+      });
+    });
+
+    render(<UploadPage />);
+
+    await user.upload(screen.getByLabelText(/Choose image files/i), file);
+    await user.click(screen.getByRole('button', { name: /Upload selected files/i }));
+
+    expect(await screen.findByText('streamed r2 line')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Uploading/i })).toBeDisabled();
+
+    resolveUpload?.({ files: [], output: ['streamed r2 line'] });
+    expect(await screen.findByText('Upload complete')).toBeInTheDocument();
+  });
+
+  it('shows backend errors and keeps streamed output visible', async () => {
     const user = userEvent.setup();
     const file = new File(['image-body'], 'source.webp', { type: 'image/webp' });
 
-    mockedUploadPhotos.mockRejectedValue(new Error('Remote upload failed.'));
+    mockedUploadPhotos.mockImplementation(async (_files, options) => {
+      if (options !== undefined && !('aborted' in options)) {
+        options.onOutput?.('remote failed log', 'stderr');
+      }
+
+      throw new Error('Remote upload failed.');
+    });
 
     render(<UploadPage />);
 
@@ -70,5 +109,6 @@ describe('UploadPage', () => {
     await user.click(screen.getByRole('button', { name: /Upload selected files/i }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Remote upload failed.');
+    expect(screen.getByText('remote failed log')).toBeInTheDocument();
   });
 });

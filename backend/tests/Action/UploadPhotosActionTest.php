@@ -73,12 +73,20 @@ final class UploadPhotosActionTest extends TestCase
                 ]);
 
             $response = $app->handle($request);
-            $payload = json_decode((string) $response->getBody(), true, 512, JSON_THROW_ON_ERROR);
+            $events = $this->decodeNdjson((string) $response->getBody());
+            $completeEvent = $events[array_key_last($events)];
 
             self::assertSame(200, $response->getStatusCode());
-            self::assertSame('source.webp', $payload['files'][0]['name']);
-            self::assertMatchesRegularExpression('#^uploads/source-\d{8}-\d{6}-[a-f0-9]{8}\.webp$#', $payload['files'][0]['path']);
-            self::assertSame(['stub upload ok'], $payload['output']);
+            self::assertSame('application/x-ndjson', $response->getHeaderLine('Content-Type'));
+            self::assertSame('file', $events[0]['type']);
+            self::assertSame('source.webp', $events[0]['file']['name']);
+            self::assertSame('output', $events[1]['type']);
+            self::assertSame('stub upload ok', $events[1]['line']);
+            self::assertSame('complete', $completeEvent['type']);
+            self::assertSame('source.webp', $completeEvent['files'][0]['name']);
+            self::assertMatchesRegularExpression('#^source-\d{8}-\d{6}-[a-f0-9]{8}\.avif$#', $completeEvent['files'][0]['path']);
+            self::assertFileDoesNotExist($photosDirectory . '/' . $events[0]['file']['path']);
+            self::assertSame(['stub upload ok'], $completeEvent['output']);
             self::assertNull($cache->get('photos:r2'));
         } finally {
             $this->removeDirectory($photosDirectory);
@@ -118,10 +126,102 @@ final class UploadPhotosActionTest extends TestCase
                 ]);
 
             $response = $app->handle($request);
-            $payload = json_decode((string) $response->getBody(), true, 512, JSON_THROW_ON_ERROR);
+            $events = $this->decodeNdjson((string) $response->getBody());
+            $completeEvent = $events[array_key_last($events)];
 
             self::assertSame(200, $response->getStatusCode());
-            self::assertSame('nested.avif', $payload['files'][0]['name']);
+            self::assertSame('nested.avif', $completeEvent['files'][0]['name']);
+        } finally {
+            $this->removeDirectory($photosDirectory);
+            $this->removeDirectory($scriptDirectory);
+        }
+    }
+
+    public function testItStreamsScriptFailureAndKeepsCache(): void
+    {
+        $photosDirectory = $this->createTempDirectory('gallery-upload-action-photos-');
+        $cacheDirectory = $this->createTempDirectory('gallery-upload-action-cache-');
+        $cache = new FilePhotoCache($cacheDirectory);
+        $cachedValue = [['id' => 'stale']];
+        $cache->put('photos:r2', $cachedValue, 300);
+
+        $scriptDirectory = $this->createTempDirectory('gallery-upload-action-script-');
+        $scriptPath = $scriptDirectory . '/upload_r2.php';
+        file_put_contents($scriptPath, $this->phpUploadScriptStub($scriptDirectory . '/upload.log', 7, "remote failed\n"));
+
+        try {
+            $app = createApp(
+                $photosDirectory,
+                '/media',
+                $cache,
+                true,
+                '/media',
+                null,
+                null,
+                null,
+                null,
+                null,
+                $scriptPath,
+                PHP_BINARY,
+            );
+            $request = (new ServerRequestFactory())
+                ->createServerRequest('POST', '/upload')
+                ->withUploadedFiles([
+                    'file' => $this->uploadedFile($photosDirectory, 'source.webp', 'source.webp', 'image-body'),
+                ]);
+
+            $response = $app->handle($request);
+            $events = $this->decodeNdjson((string) $response->getBody());
+            $errorEvent = $events[array_key_last($events)];
+
+            self::assertSame(200, $response->getStatusCode());
+            self::assertSame('output', $events[1]['type']);
+            self::assertSame('remote failed', $events[1]['line']);
+            self::assertSame('error', $errorEvent['type']);
+            self::assertSame("Remote upload failed:\nremote failed", $errorEvent['error']);
+            self::assertSame(['remote failed'], $errorEvent['output']);
+            self::assertSame($cachedValue, $cache->get('photos:r2'));
+        } finally {
+            $this->removeDirectory($photosDirectory);
+            $this->removeDirectory($cacheDirectory);
+            $this->removeDirectory($scriptDirectory);
+        }
+    }
+
+    public function testItSubstitutesInvalidUtf8ScriptOutputInStreamEvents(): void
+    {
+        $photosDirectory = $this->createTempDirectory('gallery-upload-action-photos-');
+        $scriptDirectory = $this->createTempDirectory('gallery-upload-action-script-');
+        $scriptPath = $scriptDirectory . '/upload_r2.php';
+        file_put_contents($scriptPath, $this->phpUploadScriptStub($scriptDirectory . '/upload.log', 0, "bad \xFF output\n"));
+
+        try {
+            $app = createApp(
+                $photosDirectory,
+                '/media',
+                null,
+                true,
+                '/media',
+                null,
+                null,
+                null,
+                null,
+                null,
+                $scriptPath,
+                PHP_BINARY,
+            );
+            $request = (new ServerRequestFactory())
+                ->createServerRequest('POST', '/upload')
+                ->withUploadedFiles([
+                    'file' => $this->uploadedFile($photosDirectory, 'source.webp', 'source.webp', 'image-body'),
+                ]);
+
+            $response = $app->handle($request);
+            $events = $this->decodeNdjson((string) $response->getBody());
+
+            self::assertSame(200, $response->getStatusCode());
+            self::assertSame('output', $events[1]['type']);
+            self::assertSame('bad � output', $events[1]['line']);
         } finally {
             $this->removeDirectory($photosDirectory);
             $this->removeDirectory($scriptDirectory);
@@ -151,16 +251,29 @@ final class UploadPhotosActionTest extends TestCase
         return new UploadedFile($path, $clientName, 'image/' . pathinfo($clientName, PATHINFO_EXTENSION), filesize($path), UPLOAD_ERR_OK);
     }
 
-    private function phpUploadScriptStub(string $logPath): string
+    private function phpUploadScriptStub(string $logPath, int $exitCode = 0, string $output = "stub upload ok\n"): string
     {
         return sprintf(
             <<<'PHP'
 <?php
 file_put_contents(%s, json_encode($argv, JSON_THROW_ON_ERROR));
-fwrite(STDOUT, "stub upload ok\n");
-exit(0);
+fwrite(STDOUT, %s);
+exit(%d);
 PHP,
             var_export($logPath, true),
+            var_export($output, true),
+            $exitCode,
+        );
+    }
+
+    /**
+     * @return list<array<string,mixed>>
+     */
+    private function decodeNdjson(string $contents): array
+    {
+        return array_map(
+            static fn (string $line): array => json_decode($line, true, 512, JSON_THROW_ON_ERROR),
+            array_values(array_filter(explode("\n", trim($contents)), static fn (string $line): bool => $line !== '')),
         );
     }
 

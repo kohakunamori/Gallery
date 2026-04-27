@@ -4,12 +4,13 @@ declare(strict_types=1);
 
 namespace Gallery\Action;
 
+use Gallery\Http\CallbackStream;
 use Gallery\Service\PhotoCacheInterface;
 use Gallery\Service\PhotoUploadService;
 use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
 use Psr\Http\Message\UploadedFileInterface;
-use RuntimeException;
+use Throwable;
 
 final class UploadPhotosAction
 {
@@ -24,9 +25,8 @@ final class UploadPhotosAction
         $files = $this->extractFiles($request->getUploadedFiles());
 
         try {
-            $result = $this->uploadService->upload($files);
-            $this->photoCache->clear();
-        } catch (RuntimeException $exception) {
+            $uploadBatch = $this->uploadService->prepareUpload($files);
+        } catch (Throwable $exception) {
             $response->getBody()->write(
                 json_encode(['error' => $exception->getMessage()], JSON_THROW_ON_ERROR),
             );
@@ -36,9 +36,59 @@ final class UploadPhotosAction
                 ->withHeader('Content-Type', 'application/json');
         }
 
-        $response->getBody()->write(json_encode($result, JSON_THROW_ON_ERROR));
+        $stream = new CallbackStream(function () use ($uploadBatch): \Generator {
+            $output = [];
+            $savedFiles = $uploadBatch['files'];
+            $temporaryDirectory = $uploadBatch['temporaryDirectory'];
 
-        return $response->withHeader('Content-Type', 'application/json');
+            try {
+                foreach ($savedFiles as $file) {
+                    yield $this->encodeStreamEvent(['type' => 'file', 'file' => $file]);
+                }
+
+                try {
+                    foreach ($this->uploadService->streamUploadScriptOutput($temporaryDirectory) as $event) {
+                        $output[] = $event['line'];
+
+                        yield $this->encodeStreamEvent([
+                            'type' => 'output',
+                            'stream' => $event['stream'],
+                            'line' => $event['line'],
+                        ]);
+                    }
+
+                    $this->photoCache->clear();
+
+                    yield $this->encodeStreamEvent([
+                        'type' => 'complete',
+                        'files' => $savedFiles,
+                        'output' => $output,
+                    ]);
+                } catch (Throwable $exception) {
+                    yield $this->encodeStreamEvent([
+                        'type' => 'error',
+                        'error' => $exception->getMessage(),
+                        'output' => $output,
+                    ]);
+                }
+            } finally {
+                $this->uploadService->removeTemporaryDirectory($temporaryDirectory);
+            }
+        });
+
+        return $response
+            ->withBody($stream)
+            ->withHeader('Content-Type', 'application/x-ndjson')
+            ->withHeader('Cache-Control', 'no-cache')
+            ->withHeader('X-Accel-Buffering', 'no');
+    }
+
+    /**
+     * @param array<string,mixed> $event
+     */
+    private function encodeStreamEvent(array $event): string
+    {
+        return json_encode($event, JSON_THROW_ON_ERROR | JSON_INVALID_UTF8_SUBSTITUTE) . "\n";
     }
 
     /**

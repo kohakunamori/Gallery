@@ -33,6 +33,8 @@ function createApp(
     ?string $qiniuDomain = null,
     ?string $uploadScriptPath = null,
     ?string $uploadPythonBinary = null,
+    ?string $uploadScriptEnvFile = null,
+    ?string $uploadTemporaryDirectory = null,
 ): \Slim\App {
     $app = AppFactory::create();
     $photoCache = $cache ?? new NullPhotoCache();
@@ -114,6 +116,8 @@ function createApp(
             $photosDirectory,
             $uploadScriptPath ?? dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . 'script' . DIRECTORY_SEPARATOR . 'upload_r2.py',
             $uploadPythonBinary,
+            $uploadScriptEnvFile,
+            $uploadTemporaryDirectory,
         ),
         $photoCache,
     ));

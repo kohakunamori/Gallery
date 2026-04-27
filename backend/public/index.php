@@ -8,6 +8,7 @@ require __DIR__ . '/../vendor/autoload.php';
 
 $config = require dirname(__DIR__) . '/config/app.php';
 $qiniuConfig = $config['qiniu'];
+$uploadConfig = $config['upload'];
 
 $app = createApp(
     $config['photosDirectory'],
@@ -20,6 +21,10 @@ $app = createApp(
     $qiniuConfig['secretKey'],
     $qiniuConfig['bucket'],
     $qiniuConfig['domain'],
+    null,
+    null,
+    $uploadConfig['scriptEnvFile'],
+    $uploadConfig['temporaryDirectory'],
 );
 
 $app->run();

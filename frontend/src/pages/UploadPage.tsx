@@ -22,11 +22,27 @@ function getExtension(filename: string): string {
   return extension === undefined || extension === filename ? 'unknown' : extension.toLowerCase();
 }
 
+function UploadScriptOutput({ lines }: { lines: string[] }) {
+  if (lines.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="mt-5" aria-live="polite">
+      <h3 className="text-sm font-semibold text-on-surface">Upload script output</h3>
+      <pre className="mt-3 max-h-80 overflow-auto whitespace-pre-wrap rounded-2xl bg-on-surface p-4 text-xs leading-6 text-surface-container-lowest">
+        {lines.join('\n')}
+      </pre>
+    </div>
+  );
+}
+
 export function UploadPage() {
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [status, setStatus] = useState<'idle' | 'uploading' | 'success' | 'error'>('idle');
   const [result, setResult] = useState<UploadPhotosResponse | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [scriptOutput, setScriptOutput] = useState<string[]>([]);
   const totalSize = useMemo(
     () => selectedFiles.reduce((sum, file) => sum + file.size, 0),
     [selectedFiles],
@@ -39,6 +55,7 @@ export function UploadPage() {
     setStatus('idle');
     setResult(null);
     setErrorMessage(null);
+    setScriptOutput([]);
 
     if (nextFiles.length > 0) {
       event.currentTarget.value = '';
@@ -52,15 +69,19 @@ export function UploadPage() {
       setStatus('error');
       setErrorMessage('Choose one or more image files before uploading.');
       setResult(null);
+      setScriptOutput([]);
       return;
     }
 
     setStatus('uploading');
     setErrorMessage(null);
     setResult(null);
+    setScriptOutput([]);
 
     try {
-      const nextResult = await uploadPhotos(selectedFiles);
+      const nextResult = await uploadPhotos(selectedFiles, {
+        onOutput: (line) => setScriptOutput((currentOutput) => [...currentOutput, line]),
+      });
 
       setResult(nextResult);
       setStatus('success');
@@ -144,6 +165,12 @@ export function UploadPage() {
           </section>
         )}
 
+        {(status === 'uploading' || status === 'error') && scriptOutput.length > 0 && (
+          <section className="mt-6 rounded-[24px] bg-surface-container-lowest p-5 shadow-ambient">
+            <UploadScriptOutput lines={scriptOutput} />
+          </section>
+        )}
+
         {status === 'success' && result !== null && (
           <section className="mt-6 rounded-[24px] bg-surface-container-lowest p-5 shadow-ambient" aria-live="polite">
             <h2 className="font-headline text-2xl font-semibold tracking-[-0.03em]">Upload complete</h2>
@@ -158,14 +185,7 @@ export function UploadPage() {
               ))}
             </ul>
 
-            {result.output.length > 0 && (
-              <div className="mt-5">
-                <h3 className="text-sm font-semibold text-on-surface">Upload script output</h3>
-                <pre className="mt-3 max-h-80 overflow-auto whitespace-pre-wrap rounded-2xl bg-on-surface p-4 text-xs leading-6 text-surface-container-lowest">
-                  {result.output.join('\n')}
-                </pre>
-              </div>
-            )}
+            <UploadScriptOutput lines={result.output.length > 0 ? result.output : scriptOutput} />
           </section>
         )}
       </section>

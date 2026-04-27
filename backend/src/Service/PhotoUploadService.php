@@ -11,12 +11,14 @@ use Throwable;
 final class PhotoUploadService
 {
     private const ALLOWED_EXTENSIONS = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'tiff', 'svg', 'avif', 'heic'];
-    private const UPLOAD_DIRECTORY_NAME = 'uploads';
+    private const TEMPORARY_UPLOAD_PREFIX = 'gallery-upload-batch-';
 
     public function __construct(
         private readonly string $photosDirectory,
         private readonly string $scriptPath,
         private readonly ?string $pythonBinary = null,
+        private readonly ?string $scriptEnvFile = null,
+        private readonly ?string $temporaryDirectoryRoot = null,
     ) {
     }
 
@@ -25,6 +27,24 @@ final class PhotoUploadService
      * @return array{files:list<array{name:string,path:string,size:int}>,output:list<string>}
      */
     public function upload(array $files): array
+    {
+        $uploadBatch = $this->prepareUpload($files);
+
+        try {
+            return [
+                'files' => $uploadBatch['files'],
+                'output' => $this->runUploadScriptStreaming(null, $uploadBatch['temporaryDirectory']),
+            ];
+        } finally {
+            $this->removeDirectory($uploadBatch['temporaryDirectory']);
+        }
+    }
+
+    /**
+     * @param list<UploadedFileInterface> $files
+     * @return array{files:list<array{name:string,path:string,size:int}>,temporaryDirectory:string}
+     */
+    public function prepareUpload(array $files): array
     {
         if ($files === []) {
             throw new RuntimeException('No image files were uploaded.');
@@ -40,39 +60,45 @@ final class PhotoUploadService
             throw new RuntimeException('Upload script is unavailable.');
         }
 
-        $targetDirectory = $this->buildTargetDirectory();
+        $temporaryDirectory = $this->buildTemporaryDirectory();
         $savedFiles = [];
 
-        foreach ($validatedFiles as $validatedFile) {
-            $filename = $this->uniqueFilename(
-                $targetDirectory,
-                $this->buildUniqueBaseName($validatedFile['safeBaseName']),
-                $validatedFile['extension'],
-            );
-            $path = $targetDirectory . DIRECTORY_SEPARATOR . $filename;
-
-            try {
-                $validatedFile['file']->moveTo($path);
-            } catch (Throwable $exception) {
-                throw new RuntimeException(
-                    sprintf('Unable to save uploaded file %s.', $validatedFile['originalName']),
-                    0,
-                    $exception,
+        try {
+            foreach ($validatedFiles as $validatedFile) {
+                $filename = $this->uniqueFilename(
+                    $temporaryDirectory,
+                    $this->buildUniqueBaseName($validatedFile['safeBaseName']),
+                    $validatedFile['extension'],
                 );
+                $temporaryPath = $temporaryDirectory . DIRECTORY_SEPARATOR . $filename;
+
+                try {
+                    $validatedFile['file']->moveTo($temporaryPath);
+                } catch (Throwable $exception) {
+                    throw new RuntimeException(
+                        sprintf('Unable to stage uploaded file %s.', $validatedFile['originalName']),
+                        0,
+                        $exception,
+                    );
+                }
+
+                $size = filesize($temporaryPath);
+
+                $savedFiles[] = [
+                    'name' => $validatedFile['originalName'],
+                    'path' => $this->publishedRelativePath($filename),
+                    'size' => $size === false ? 0 : $size,
+                ];
             }
+        } catch (Throwable $exception) {
+            $this->removeDirectory($temporaryDirectory);
 
-            $size = filesize($path);
-
-            $savedFiles[] = [
-                'name' => $validatedFile['originalName'],
-                'path' => $this->relativePath($path),
-                'size' => $size === false ? 0 : $size,
-            ];
+            throw $exception;
         }
 
         return [
             'files' => $savedFiles,
-            'output' => $this->runUploadScript(),
+            'temporaryDirectory' => $temporaryDirectory,
         ];
     }
 
@@ -116,16 +142,22 @@ final class PhotoUploadService
         return $validatedFiles;
     }
 
-    private function buildTargetDirectory(): string
+    private function buildTemporaryDirectory(): string
     {
-        $directory = rtrim($this->photosDirectory, '/\\') . DIRECTORY_SEPARATOR . self::UPLOAD_DIRECTORY_NAME;
+        $root = rtrim($this->temporaryDirectoryRoot ?? sys_get_temp_dir(), '/\\');
 
-        if (!is_dir($directory) && !mkdir($directory, 0777, true) && !is_dir($directory)) {
-            throw new RuntimeException('Unable to create the upload directory.');
+        if (!is_dir($root) && !@mkdir($root, 0770, true) && !is_dir($root)) {
+            throw new RuntimeException('Unable to create the temporary upload root directory.');
         }
 
-        if (!is_writable($directory)) {
-            throw new RuntimeException('The upload directory is not writable.');
+        if (!is_writable($root)) {
+            throw new RuntimeException('The temporary upload root directory is not writable.');
+        }
+
+        $directory = $root . DIRECTORY_SEPARATOR . self::TEMPORARY_UPLOAD_PREFIX . bin2hex(random_bytes(8));
+
+        if (!@mkdir($directory, 0700, true) && !is_dir($directory)) {
+            throw new RuntimeException('Unable to create the temporary upload directory.');
         }
 
         return $directory;
@@ -164,12 +196,15 @@ final class PhotoUploadService
         return $filename;
     }
 
-    private function relativePath(string $path): string
+    private function publishedRelativePath(string $filename): string
     {
-        $normalizedBase = str_replace('\\', '/', rtrim($this->photosDirectory, '/\\'));
-        $normalizedPath = str_replace('\\', '/', $path);
+        $compression = $_ENV['UPLOAD_COMPRESSION'] ?? getenv('UPLOAD_COMPRESSION') ?: 'avif-lossless';
 
-        return ltrim(substr($normalizedPath, strlen($normalizedBase)), '/');
+        if ($compression === 'avif-lossless' && in_array(strtolower(pathinfo($filename, PATHINFO_EXTENSION)), ['jpg', 'jpeg', 'png', 'webp', 'bmp', 'tiff'], true)) {
+            return pathinfo($filename, PATHINFO_FILENAME) . '.avif';
+        }
+
+        return $filename;
     }
 
     private function uploadErrorMessage(int $error): string
@@ -204,38 +239,75 @@ final class PhotoUploadService
     /**
      * @return list<string>
      */
-    private function runUploadScript(): array
+    public function runUploadScriptStreaming(?callable $onOutput = null, ?string $uploadDirectory = null): array
     {
-        $command = array_merge(
-            $this->buildPythonCommandPrefix(),
-            [
-                $this->scriptPath,
-                '--dir',
-                $this->photosDirectory,
-                '--recursive',
-                '--target',
-                'all',
-            ],
-        );
+        $output = [];
+
+        foreach ($this->streamUploadScriptOutput($uploadDirectory) as $event) {
+            $output[] = $event['line'];
+
+            if ($onOutput !== null) {
+                $onOutput($event['line'], $event['stream']);
+            }
+        }
+
+        return $output;
+    }
+
+    /**
+     * @return \Generator<int,array{line:string,stream:string},void,list<string>>
+     */
+    public function streamUploadScriptOutput(?string $uploadDirectory = null): \Generator
+    {
+        $command = array_merge($this->buildPythonCommandPrefix(), $this->buildUploadScriptArguments($uploadDirectory ?? $this->photosDirectory));
         $descriptorSpec = [
             1 => ['pipe', 'w'],
             2 => ['pipe', 'w'],
         ];
-        $process = @proc_open($command, $descriptorSpec, $pipes, dirname($this->scriptPath));
+        $process = @proc_open($command, $descriptorSpec, $pipes, dirname($this->scriptPath), $this->processEnvironment($uploadDirectory));
 
         if (!is_resource($process)) {
             throw new RuntimeException('Python interpreter is unavailable.');
         }
 
-        $stdout = stream_get_contents($pipes[1]);
-        $stderr = stream_get_contents($pipes[2]);
-        fclose($pipes[1]);
-        fclose($pipes[2]);
+        stream_set_blocking($pipes[1], false);
+        stream_set_blocking($pipes[2], false);
+
+        $output = [];
+        $buffers = ['stdout' => '', 'stderr' => ''];
+        $openPipes = ['stdout' => $pipes[1], 'stderr' => $pipes[2]];
+
+        while ($openPipes !== []) {
+            foreach ($openPipes as $streamName => $pipe) {
+                $chunk = stream_get_contents($pipe);
+
+                if ($chunk !== false && $chunk !== '') {
+                    $buffers[$streamName] .= $chunk;
+
+                    foreach ($this->extractCompleteOutputLines($buffers[$streamName]) as $line) {
+                        $output[] = $line;
+                        yield ['line' => $line, 'stream' => $streamName];
+                    }
+                }
+
+                if (feof($pipe)) {
+                    if (trim($buffers[$streamName]) !== '') {
+                        $line = rtrim($buffers[$streamName], "\r\n");
+                        $output[] = $line;
+                        yield ['line' => $line, 'stream' => $streamName];
+                    }
+
+                    fclose($pipe);
+                    unset($openPipes[$streamName]);
+                }
+            }
+
+            if ($openPipes !== []) {
+                usleep(10000);
+            }
+        }
+
         $exitCode = proc_close($process);
-        $output = array_values(array_filter(
-            preg_split('/\R/', trim((string) $stdout . "\n" . (string) $stderr)) ?: [],
-            static fn (string $line): bool => trim($line) !== '',
-        ));
 
         if ($exitCode === 127 || $exitCode === 9009) {
             throw new RuntimeException($output === [] ? 'Python interpreter is unavailable.' : "Python interpreter is unavailable:\n" . implode("\n", $output));
@@ -246,5 +318,116 @@ final class PhotoUploadService
         }
 
         return $output;
+    }
+
+    /**
+     * @return array<string,string>
+     */
+    private function processEnvironment(?string $uploadDirectory = null): array
+    {
+        $environment = [];
+
+        $sourceEnvironment = getenv();
+
+        if (!is_array($sourceEnvironment)) {
+            $sourceEnvironment = [];
+        }
+
+        foreach (array_merge($sourceEnvironment, $_ENV, $_SERVER) as $key => $value) {
+            if (is_string($key) && (is_string($value) || is_numeric($value))) {
+                $environment[$key] = (string) $value;
+            }
+        }
+
+        $environment['PYTHONUNBUFFERED'] = '1';
+
+        if ($uploadDirectory !== null) {
+            $cacheDirectory = rtrim($uploadDirectory, '/\\') . DIRECTORY_SEPARATOR . '.upload-runtime-cache';
+            $environment['UPLOAD_TARGET_CACHE_FILE'] = $cacheDirectory . DIRECTORY_SEPARATOR . '.upload_target_cache.json';
+            $environment['UPLOAD_PREPARED_CACHE_DIR'] = $cacheDirectory . DIRECTORY_SEPARATOR . '.upload_prepared_cache';
+        }
+
+        return $environment;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function buildUploadScriptArguments(string $uploadDirectory): array
+    {
+        $arguments = [
+            $this->scriptPath,
+            '--dir',
+            $uploadDirectory,
+            '--recursive',
+            '--target',
+            'all',
+        ];
+
+        if ($this->scriptEnvFile !== null && $this->scriptEnvFile !== '') {
+            $arguments[] = '--env-file';
+            $arguments[] = $this->scriptEnvFile;
+        }
+
+        return $arguments;
+    }
+
+    public function removeTemporaryDirectory(string $directory): void
+    {
+        if (str_starts_with(basename($directory), self::TEMPORARY_UPLOAD_PREFIX)) {
+            $this->removeDirectory($directory);
+        }
+    }
+
+    private function removeDirectory(string $directory): void
+    {
+        if (!is_dir($directory)) {
+            return;
+        }
+
+        $items = scandir($directory);
+
+        if ($items === false) {
+            return;
+        }
+
+        foreach ($items as $item) {
+            if ($item === '.' || $item === '..') {
+                continue;
+            }
+
+            $path = $directory . DIRECTORY_SEPARATOR . $item;
+
+            if (is_dir($path) && !is_link($path)) {
+                $this->removeDirectory($path);
+
+                continue;
+            }
+
+            @unlink($path);
+        }
+
+        @rmdir($directory);
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function extractCompleteOutputLines(string &$buffer): array
+    {
+        $lines = [];
+
+        while (preg_match('/\R/', $buffer, $match, PREG_OFFSET_CAPTURE) === 1) {
+            $separator = $match[0][0];
+            $offset = $match[0][1];
+            $line = substr($buffer, 0, $offset);
+            $buffer = substr($buffer, $offset + strlen($separator));
+
+            if (trim($line) !== '') {
+                $lines[] = $line;
+            }
+        }
+
+        return $lines;
     }
 }

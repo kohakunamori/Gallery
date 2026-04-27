@@ -411,6 +411,16 @@ class CacheSectionHelperTests(unittest.TestCase):
             )
 
 
+class CachePathOverrideTests(unittest.TestCase):
+    def test_cache_paths_can_be_overridden_by_environment(self):
+        with TemporaryDirectory() as temp_dir, patch.dict(os.environ, {
+            'UPLOAD_TARGET_CACHE_FILE': str(Path(temp_dir) / 'target-cache.json'),
+            'UPLOAD_PREPARED_CACHE_DIR': str(Path(temp_dir) / 'prepared-cache'),
+        }, clear=False):
+            self.assertEqual(Path(temp_dir) / 'target-cache.json', upload_r2.get_cache_file_path())
+            self.assertEqual(Path(temp_dir) / 'prepared-cache', upload_r2.get_prepared_cache_dir())
+
+
 class PreparedPngCacheTests(unittest.TestCase):
     def test_prepare_upload_file_reuses_persistent_cached_png(self):
         with TemporaryDirectory() as temp_dir:
@@ -420,7 +430,7 @@ class PreparedPngCacheTests(unittest.TestCase):
             cache_dir = base_dir / upload_r2.PREPARED_CACHE_DIR_NAME
             run_calls = []
 
-            def fake_run(command, check, capture_output, text):
+            def fake_run(command, check, capture_output, **kwargs):
                 run_calls.append(command)
                 out_path = Path(command[command.index('--out') + 1])
                 out_path.write_bytes(b'compressed-png-bytes')
@@ -457,7 +467,7 @@ class PreparedPngCacheTests(unittest.TestCase):
             cache_dir = base_dir / upload_r2.PREPARED_CACHE_DIR_NAME
             run_calls = []
 
-            def fake_run(command, check, capture_output, text):
+            def fake_run(command, check, capture_output, **kwargs):
                 run_calls.append(command)
                 out_path = Path(command[command.index('--out') + 1])
                 out_path.write_bytes(b'compressed-png-bytes')
@@ -498,7 +508,7 @@ class PreparedPngCacheTests(unittest.TestCase):
             cache_dir = base_dir / upload_r2.PREPARED_CACHE_DIR_NAME
             run_calls = []
 
-            def fake_run(command, check, capture_output, text):
+            def fake_run(command, check, capture_output, **kwargs):
                 run_calls.append(command)
                 out_path = Path(command[command.index('--out') + 1])
                 out_path.write_bytes(b'compressed-png-bytes')
@@ -4196,7 +4206,7 @@ class AvifDefaultBehaviorTests(unittest.TestCase):
             cache_dir = base_dir / upload_r2.PREPARED_CACHE_DIR_NAME
             run_calls = []
 
-            def fake_run(command, check, capture_output, text):
+            def fake_run(command, check, capture_output, **kwargs):
                 run_calls.append(command)
                 out_path = Path(command[-1])
                 out_path.write_bytes(b'prepared-avif-bytes')
@@ -4217,6 +4227,33 @@ class AvifDefaultBehaviorTests(unittest.TestCase):
             finally:
                 upload_r2.cleanup_prepared_upload(first)
                 upload_r2.cleanup_prepared_upload(second)
+
+    def test_prepare_upload_file_falls_back_to_imagemagick_convert(self):
+        with TemporaryDirectory() as temp_dir:
+            base_dir = Path(temp_dir)
+            source_path = base_dir / 'image.jpg'
+            source_path.write_bytes(b'jpg-source-bytes')
+            cache_dir = base_dir / upload_r2.PREPARED_CACHE_DIR_NAME
+            run_calls = []
+
+            def fake_which(name):
+                return {'convert': '/usr/bin/convert'}.get(name)
+
+            def fake_run(command, check, capture_output, **kwargs):
+                run_calls.append(command)
+                Path(command[-1]).write_bytes(b'prepared-avif-bytes')
+                return SimpleNamespace(stdout='', stderr='')
+
+            with patch('upload_r2.shutil.which', side_effect=fake_which), \
+                 patch('upload_r2.subprocess.run', side_effect=fake_run), \
+                 patch.object(upload_r2, 'get_prepared_cache_dir', return_value=cache_dir, create=True):
+                prepared = upload_r2.prepare_upload_file(source_path, upload_r2.DEFAULT_COMPRESSION_MODE)
+
+            try:
+                self.assertEqual('/usr/bin/convert', run_calls[0][0])
+                self.assertEqual('.avif', prepared.upload_path.suffix)
+            finally:
+                upload_r2.cleanup_prepared_upload(prepared)
 
     def test_build_effective_paths_use_avif_suffix_in_default_mode(self):
         with TemporaryDirectory() as temp_dir:

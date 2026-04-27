@@ -152,6 +152,7 @@ describe('ExhibitionPage', () => {
     render(<ExhibitionPage />);
 
     expect(await screen.findByRole('banner')).toHaveTextContent('Settings');
+    expect(screen.getByRole('link', { name: 'Open gallery upload' })).toHaveAttribute('href', '/upload');
     expect(screen.getByTestId('gallery-wordmark')).toHaveTextContent('Gallery');
     expect(screen.queryByRole('heading', { name: 'A curated wall of AIGC imagery.' })).not.toBeInTheDocument();
     expect(screen.getByText('March 2026')).toBeInTheDocument();

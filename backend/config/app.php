@@ -32,4 +32,8 @@ return [
         'bucket' => $readOptionalEnv('QINIU_BUCKET'),
         'domain' => $readOptionalEnv('QINIU_DOMAIN'),
     ],
+    'upload' => [
+        'scriptEnvFile' => $readOptionalEnv('UPLOAD_SCRIPT_ENV_FILE'),
+        'temporaryDirectory' => $readOptionalEnv('UPLOAD_TEMPORARY_DIRECTORY') ?? $backendDirectory . '/var/upload-batches',
+    ],
 ];

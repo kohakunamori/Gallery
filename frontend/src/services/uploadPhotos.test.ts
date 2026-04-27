@@ -1,6 +1,20 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { uploadPhotos } from './uploadPhotos';
 
+function streamResponse(lines: string[]): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+
+  return new ReadableStream({
+    start(controller) {
+      for (const line of lines) {
+        controller.enqueue(encoder.encode(line));
+      }
+
+      controller.close();
+    },
+  });
+}
+
 describe('uploadPhotos', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -9,6 +23,7 @@ describe('uploadPhotos', () => {
   it('posts selected files to the upload endpoint', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
+      headers: new Headers({ 'Content-Type': 'application/json' }),
       json: async () => ({
         files: [{ name: 'fresh.avif', path: 'uploads/fresh.avif', size: 12 }],
         output: ['uploaded'],
@@ -33,6 +48,68 @@ describe('uploadPhotos', () => {
     expect(body.getAll('files')).toEqual([file]);
   });
 
+  it('streams script output and resolves with the complete event', async () => {
+    const onOutput = vi.fn();
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        headers: new Headers({ 'Content-Type': 'application/x-ndjson' }),
+        body: streamResponse([
+          JSON.stringify({ type: 'output', stream: 'stdout', line: 'uploading r2' }) + '\n',
+          JSON.stringify({
+            type: 'complete',
+            files: [{ name: 'fresh.webp', path: 'uploads/fresh.webp', size: 4 }],
+            output: ['uploading r2'],
+          }) + '\n',
+        ]),
+      }),
+    );
+
+    await expect(uploadPhotos([new File(['body'], 'fresh.webp')], { onOutput })).resolves.toEqual({
+      files: [{ name: 'fresh.webp', path: 'uploads/fresh.webp', size: 4 }],
+      output: ['uploading r2'],
+    });
+    expect(onOutput).toHaveBeenCalledWith('uploading r2', 'stdout');
+  });
+
+  it('reports invalid html lines in upload streams', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        headers: new Headers({ 'Content-Type': 'application/x-ndjson' }),
+        body: streamResponse(['<br /> Fatal error\n']),
+      }),
+    );
+
+    await expect(uploadPhotos([new File(['body'], 'fresh.webp')])).rejects.toThrow(
+      'Upload stream returned a server error: Fatal error',
+    );
+  });
+
+  it('rejects terminal stream errors after emitting script output', async () => {
+    const onOutput = vi.fn();
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        headers: new Headers({ 'Content-Type': 'application/x-ndjson' }),
+        body: streamResponse([
+          JSON.stringify({ type: 'output', stream: 'stderr', line: 'remote failed' }) + '\n',
+          JSON.stringify({ type: 'error', error: 'Remote upload failed. Continue reading logs.' }) + '\n',
+        ]),
+      }),
+    );
+
+    await expect(uploadPhotos([new File(['body'], 'fresh.webp')], { onOutput })).rejects.toThrow(
+      'Remote upload failed. Continue reading logs.',
+    );
+    expect(onOutput).toHaveBeenCalledWith('remote failed', 'stderr');
+  });
+
   it('throws backend validation errors', async () => {
     vi.stubGlobal(
       'fetch',
@@ -46,6 +123,18 @@ describe('uploadPhotos', () => {
     await expect(uploadPhotos([new File(['notes'], 'notes.txt')])).rejects.toThrow(
       'Unsupported image format: notes.txt',
     );
+  });
+
+  it('shows text from non-json error responses', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(new Response('<br /> Fatal error', {
+        status: 500,
+        headers: { 'Content-Type': 'text/html' },
+      })),
+    );
+
+    await expect(uploadPhotos([new File(['body'], 'fresh.webp')])).rejects.toThrow('Fatal error');
   });
 
   it('uses a status error when the response body is not JSON', async () => {

@@ -43,6 +43,16 @@ QINIU_EXISTENCE_CHECK_MAX_WORKERS = 4
 QINIU_STAT_RETRY_STATUS_CODES = {502}
 QINIU_STAT_MAX_ATTEMPTS = 3
 LINUX_EXISTING_PHOTOS_API_URL = 'https://aigc.nyaneko.cn/api/photos?mediaSource=local'
+SUBPROCESS_TEXT_KWARGS = {'text': True, 'encoding': 'utf-8', 'errors': 'replace'}
+
+
+def configure_standard_streams() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, 'reconfigure'):
+            stream.reconfigure(encoding='utf-8', errors='replace')
+
+
+configure_standard_streams()
 
 
 @dataclass(frozen=True)
@@ -122,10 +132,18 @@ def get_expected_upload_cache_semantics(
 
 
 def get_cache_file_path() -> Path:
+    cache_file = os.getenv('UPLOAD_TARGET_CACHE_FILE')
+    if cache_file:
+        return Path(cache_file).expanduser().resolve()
+
     return Path(__file__).resolve().parent / CACHE_FILE_NAME
 
 
 def get_prepared_cache_dir() -> Path:
+    cache_dir = os.getenv('UPLOAD_PREPARED_CACHE_DIR')
+    if cache_dir:
+        return Path(cache_dir).expanduser().resolve()
+
     return Path(__file__).resolve().parent / PREPARED_CACHE_DIR_NAME
 
 
@@ -1246,13 +1264,25 @@ def build_prepared_avif_command(executable: str, source_path: Path, temp_path: P
     ]
 
 
+def resolve_imagemagick_executable() -> tuple[str, str]:
+    executable = shutil.which('magick')
+    if executable:
+        return executable, 'magick'
+
+    executable = shutil.which('convert')
+    if executable:
+        return executable, 'convert'
+
+    raise RuntimeError('未在 PATH 中找到 ImageMagick CLI。请安装 ImageMagick 7 的 magick，或安装 ImageMagick 6 的 convert，并启用 AVIF/libheif 支持')
+
+
 def run_prepared_file_command(command: list[str], *, tool_name: str, temp_path: Path) -> None:
     try:
         subprocess.run(
             command,
             check=True,
             capture_output=True,
-            text=True,
+            **SUBPROCESS_TEXT_KWARGS,
         )
     except subprocess.CalledProcessError as exc:
         detail = (exc.stderr or '').strip() or (exc.stdout or '').strip() or str(exc)
@@ -1305,10 +1335,7 @@ def prepare_upload_file(path: Path, compression: str | None = COMPATIBILITY_COMP
         tool_name = 'oxipng'
         command_builder = build_prepared_png_command
     elif compression_strategy == AVIF_LOSSLESS_COMPRESSION_STRATEGY:
-        executable = shutil.which('magick')
-        if not executable:
-            raise RuntimeError('未在 PATH 中找到 ImageMagick magick CLI，请先安装 ImageMagick 并启用 AVIF/libheif 支持')
-        tool_name = 'magick'
+        executable, tool_name = resolve_imagemagick_executable()
         command_builder = build_prepared_avif_command
     else:
         raise RuntimeError(f'不支持的压缩策略：{compression_strategy}')
@@ -1649,7 +1676,7 @@ def set_linux_remote_mtime_via_ssh(
         target,
         f'touch -m -d @{mtime} -- {remote_path}',
     ]
-    subprocess.run(ssh_cmd, check=True, capture_output=True, text=True)
+    subprocess.run(ssh_cmd, check=True, capture_output=True, **SUBPROCESS_TEXT_KWARGS)
 
 
 def build_linux_proxy_sock(proxy_url: str, *, host: str, port: int):
@@ -1945,16 +1972,16 @@ def upload_to_linux(
     ]
 
     try:
-        subprocess.run(mkdir_cmd, check=True, capture_output=True, text=True)
+        subprocess.run(mkdir_cmd, check=True, capture_output=True, **SUBPROCESS_TEXT_KWARGS)
         if skip_existing:
             try:
-                subprocess.run(exists_cmd, check=True, capture_output=True, text=True)
+                subprocess.run(exists_cmd, check=True, capture_output=True, **SUBPROCESS_TEXT_KWARGS)
             except subprocess.CalledProcessError as exc:
                 if exc.returncode == 1:
                     return 'skipped', f'跳过 {source_path.name} -> {target}:{remote_path}'
                 detail = exc.stderr.strip() or exc.stdout.strip() or str(exc)
                 return 'failed', f'失败 {source_path.name}：{detail}'
-        subprocess.run(scp_cmd, check=True, capture_output=True, text=True)
+        subprocess.run(scp_cmd, check=True, capture_output=True, **SUBPROCESS_TEXT_KWARGS)
         set_linux_remote_mtime_via_ssh(
             source_path=source_path,
             remote_path=remote_path,
@@ -2007,7 +2034,7 @@ def check_linux_remote_skip_result(
     ]
     exists_cmd = [*ssh_base_cmd, 'test', '-e', remote_path]
     try:
-        subprocess.run(exists_cmd, check=True, capture_output=True, text=True)
+        subprocess.run(exists_cmd, check=True, capture_output=True, **SUBPROCESS_TEXT_KWARGS)
         return 'skipped', f'跳过 {source_path.name} -> {target}:{remote_path}'
     except subprocess.CalledProcessError as exc:
         if exc.returncode == 1:

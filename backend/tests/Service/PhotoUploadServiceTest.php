@@ -22,7 +22,8 @@ final class PhotoUploadServiceTest extends TestCase
 
         file_put_contents($scriptPath, $this->phpUploadScriptStub($pythonLog, 0, "remote upload ok\n"));
 
-        $service = new PhotoUploadService($photosDirectory, $scriptPath, PHP_BINARY);
+        $temporaryDirectoryRoot = $this->createTempDirectory('gallery-upload-batches-');
+        $service = new PhotoUploadService($photosDirectory, $scriptPath, PHP_BINARY, null, $temporaryDirectoryRoot);
         $sourcePath = $scriptDirectory . '/source.avif';
         file_put_contents($sourcePath, 'image-body');
 
@@ -33,19 +34,26 @@ final class PhotoUploadServiceTest extends TestCase
         self::assertCount(1, $result['files']);
         self::assertSame('unsafe name.avif', $result['files'][0]['name']);
         self::assertSame(strlen('image-body'), $result['files'][0]['size']);
-        self::assertMatchesRegularExpression('#^uploads/unsafe-name-\d{8}-\d{6}-[a-f0-9]{8}\.avif$#', $result['files'][0]['path']);
-        self::assertFileExists($photosDirectory . '/' . $result['files'][0]['path']);
+        self::assertMatchesRegularExpression('#^unsafe-name-\d{8}-\d{6}-[a-f0-9]{8}\.avif$#', $result['files'][0]['path']);
+        self::assertFileDoesNotExist($photosDirectory . '/' . $result['files'][0]['path']);
         self::assertSame(['remote upload ok'], $result['output']);
 
         $commandArguments = json_decode((string) file_get_contents($pythonLog), true, 512, JSON_THROW_ON_ERROR);
         self::assertSame([
             $scriptPath,
             '--dir',
-            $photosDirectory,
+        ], array_slice($commandArguments, 0, 2));
+        self::assertStringStartsWith($temporaryDirectoryRoot . DIRECTORY_SEPARATOR, $commandArguments[2]);
+        self::assertStringContainsString('gallery-upload-batch-', $commandArguments[2]);
+        self::assertFileDoesNotExist($commandArguments[2]);
+        self::assertSame([
             '--recursive',
             '--target',
             'all',
-        ], $commandArguments);
+        ], array_slice($commandArguments, 3));
+        $environment = json_decode((string) file_get_contents($scriptDirectory . '/environment.json'), true, 512, JSON_THROW_ON_ERROR);
+        self::assertStringStartsWith($commandArguments[2], $environment['UPLOAD_TARGET_CACHE_FILE']);
+        self::assertStringStartsWith($commandArguments[2], $environment['UPLOAD_PREPARED_CACHE_DIR']);
 
         $serviceWithDefaultPython = new PhotoUploadService($photosDirectory, $scriptPath);
         $buildPythonCommandPrefix = new \ReflectionMethod($serviceWithDefaultPython, 'buildPythonCommandPrefix');
@@ -53,6 +61,46 @@ final class PhotoUploadServiceTest extends TestCase
 
         $this->removeDirectory($photosDirectory);
         $this->removeDirectory($scriptDirectory);
+        $this->removeDirectory($temporaryDirectoryRoot);
+    }
+
+    public function testItPassesConfiguredEnvFileToUploadScript(): void
+    {
+        $photosDirectory = $this->createTempDirectory('gallery-upload-photos-');
+        $scriptDirectory = $this->createTempDirectory('gallery-upload-script-');
+        $pythonLog = $scriptDirectory . '/python.log';
+        $scriptPath = $scriptDirectory . '/upload_r2.php';
+        $envFile = $scriptDirectory . '/upload_r2.env';
+
+        file_put_contents($scriptPath, $this->phpUploadScriptStub($pythonLog, 0, "remote upload ok\n"));
+        file_put_contents($envFile, "R2_BUCKET=example\n");
+
+        $service = new PhotoUploadService($photosDirectory, $scriptPath, PHP_BINARY, $envFile);
+        $sourcePath = $scriptDirectory . '/source.webp';
+        file_put_contents($sourcePath, 'image-body');
+
+        try {
+            $service->upload([
+                new UploadedFile($sourcePath, 'source.webp', 'image/webp', filesize($sourcePath), UPLOAD_ERR_OK),
+            ]);
+
+            $commandArguments = json_decode((string) file_get_contents($pythonLog), true, 512, JSON_THROW_ON_ERROR);
+            self::assertSame([
+                $scriptPath,
+                '--dir',
+            ], array_slice($commandArguments, 0, 2));
+            self::assertStringContainsString('gallery-upload-batch-', $commandArguments[2]);
+            self::assertSame([
+                '--recursive',
+                '--target',
+                'all',
+                '--env-file',
+                $envFile,
+            ], array_slice($commandArguments, 3));
+        } finally {
+            $this->removeDirectory($photosDirectory);
+            $this->removeDirectory($scriptDirectory);
+        }
     }
 
     public function testItTreatsNoFileUploadEntriesAsNoFiles(): void
@@ -75,7 +123,7 @@ final class PhotoUploadServiceTest extends TestCase
                 new UploadedFile($sourcePath, '', 'application/octet-stream', 0, UPLOAD_ERR_NO_FILE),
             ]);
         } finally {
-            self::assertFileDoesNotExist($photosDirectory . '/uploads');
+            self::assertFileDoesNotExist($photosDirectory . '/notes');
             self::assertFileDoesNotExist($scriptDirectory . '/python.log');
             $this->removeDirectory($photosDirectory);
             $this->removeDirectory($scriptDirectory);
@@ -103,8 +151,35 @@ final class PhotoUploadServiceTest extends TestCase
                 new UploadedFile($sourcePath, 'notes.txt', 'text/plain', filesize($sourcePath), UPLOAD_ERR_OK),
             ]);
         } finally {
-            self::assertFileDoesNotExist($photosDirectory . '/uploads');
+            self::assertFileDoesNotExist($photosDirectory . '/notes');
             self::assertFileDoesNotExist($pythonLog);
+            $this->removeDirectory($photosDirectory);
+            $this->removeDirectory($scriptDirectory);
+        }
+    }
+
+    public function testItStreamsUploadScriptOutput(): void
+    {
+        $photosDirectory = $this->createTempDirectory('gallery-upload-photos-');
+        $scriptDirectory = $this->createTempDirectory('gallery-upload-script-');
+        $scriptPath = $scriptDirectory . '/upload_r2.php';
+
+        file_put_contents($scriptPath, $this->phpUploadScriptStub($scriptDirectory . '/python.log', 0, "first line\nsecond line\n"));
+
+        $service = new PhotoUploadService($photosDirectory, $scriptPath, PHP_BINARY);
+        $events = [];
+
+        try {
+            $output = $service->runUploadScriptStreaming(static function (string $line, string $stream) use (&$events): void {
+                $events[] = [$stream, $line];
+            });
+
+            self::assertSame(['first line', 'second line'], $output);
+            self::assertSame([
+                ['stdout', 'first line'],
+                ['stdout', 'second line'],
+            ], $events);
+        } finally {
             $this->removeDirectory($photosDirectory);
             $this->removeDirectory($scriptDirectory);
         }
@@ -174,9 +249,14 @@ final class PhotoUploadServiceTest extends TestCase
             <<<'PHP'
 <?php
 file_put_contents(%s, json_encode($argv, JSON_THROW_ON_ERROR));
+file_put_contents(dirname(%s) . '/environment.json', json_encode([
+    'UPLOAD_TARGET_CACHE_FILE' => getenv('UPLOAD_TARGET_CACHE_FILE'),
+    'UPLOAD_PREPARED_CACHE_DIR' => getenv('UPLOAD_PREPARED_CACHE_DIR'),
+], JSON_THROW_ON_ERROR));
 fwrite(STDOUT, %s);
 exit(%d);
 PHP,
+            var_export($logPath, true),
             var_export($logPath, true),
             var_export($output, true),
             $exitCode,
