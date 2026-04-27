@@ -1,0 +1,8 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": ".trellis/spec/frontend/index.md", "reason": "Frontend development guide"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Cross-layer upload contract"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Reuse existing upload and service patterns"}
+{"file": "backend/src/Action/GetPhotosAction.php", "reason": "Backend action JSON response pattern"}
+{"file": "frontend/src/services/photos.ts", "reason": "Frontend fetch service pattern"}
+{"file": "frontend/src/pages/ExhibitionPage.tsx", "reason": "Frontend page async state pattern"}

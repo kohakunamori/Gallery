@@ -1,0 +1,7 @@
+{"file": ".claude/commands/trellis/finish-work.md", "reason": "Finish work checklist"}
+{"file": ".claude/commands/trellis/check.md", "reason": "Code quality check spec"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Cross-layer upload contract"}
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Reuse existing upload and service patterns"}
+{"file": "backend/src/Action/GetPhotosAction.php", "reason": "Backend action JSON response pattern"}
+{"file": "frontend/src/services/photos.ts", "reason": "Frontend fetch service pattern"}
+{"file": "frontend/src/pages/ExhibitionPage.tsx", "reason": "Frontend page async state pattern"}
