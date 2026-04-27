@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ExhibitionPage } from './ExhibitionPage';
 import { fetchPhotos } from '../services/photos';
 import { fetchMediaSourceStatuses } from '../services/mediaSources';
+import type { MediaSourceStatus } from '../services/mediaSources';
 import { GALLERY_MEDIA_SOURCE_VISIBILITY, GALLERY_SETTINGS_STORAGE_KEY } from '../utils/gallerySettings';
 
 vi.mock('../services/photos', () => ({
@@ -90,7 +91,7 @@ const photos = [
   },
 ];
 
-const mediaSourceStatuses = [
+const mediaSourceStatuses: MediaSourceStatus[] = [
   {
     source: 'r2' as const,
     isAvailable: true,
@@ -224,10 +225,14 @@ describe('ExhibitionPage', () => {
       {
         ...mediaSourceStatuses[1],
         usage: {
-          ...mediaSourceStatuses[1].usage,
+          period: '2026-04',
           usedBytes: 8 * 1024 ** 3,
           quotaBytes: 10 * 1024 ** 3,
           remainingBytes: 2 * 1024 ** 3,
+          isDisabled: false,
+          isAvailable: true,
+          status: 'available',
+          lastUpdatedAt: '2026-04-06T00:00:00Z',
         },
       },
       mediaSourceStatuses[2],
@@ -251,13 +256,14 @@ describe('ExhibitionPage', () => {
         ...mediaSourceStatuses[1],
         isDisabled: true,
         usage: {
-          ...mediaSourceStatuses[1].usage,
+          period: '2026-04',
           usedBytes: 10 * 1024 ** 3,
           quotaBytes: 10 * 1024 ** 3,
           remainingBytes: 0,
           isDisabled: true,
           isAvailable: false,
           status: 'over-quota',
+          lastUpdatedAt: '2026-04-06T00:00:00Z',
         },
       },
       mediaSourceStatuses[2],

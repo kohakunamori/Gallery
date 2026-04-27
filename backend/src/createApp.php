@@ -5,6 +5,7 @@ declare(strict_types=1);
 use Gallery\Action\GetAlbumsAction;
 use Gallery\Action\GetMediaSourceStatusAction;
 use Gallery\Action\GetPhotosAction;
+use Gallery\Action\UploadPhotosAction;
 use Gallery\Service\AlbumIndexService;
 use Gallery\Service\MediaSourceAvailabilityService;
 use Gallery\Service\NullPhotoCache;
@@ -12,6 +13,7 @@ use Gallery\Service\PhotoCacheInterface;
 use Gallery\Service\PhotoIndexService;
 use Gallery\Service\PhotoMetadataReader;
 use Gallery\Service\PhotoScanner;
+use Gallery\Service\PhotoUploadService;
 use Gallery\Service\QiniuUsageService;
 use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
@@ -29,8 +31,11 @@ function createApp(
     ?string $qiniuSecretKey = null,
     ?string $qiniuBucket = null,
     ?string $qiniuDomain = null,
+    ?string $uploadScriptPath = null,
+    ?string $uploadPythonBinary = null,
 ): \Slim\App {
     $app = AppFactory::create();
+    $photoCache = $cache ?? new NullPhotoCache();
     $scanner = new PhotoScanner();
     $metadataReader = new PhotoMetadataReader();
     $mediaBaseUrls = [
@@ -65,7 +70,7 @@ function createApp(
         $metadataReader,
         $photosDirectory,
         $mediaBaseUrl,
-        $cache ?? new NullPhotoCache(),
+        $photoCache,
         15,
         $localMediaBaseUrl,
         $mediaSourceAvailabilityService,
@@ -104,6 +109,14 @@ function createApp(
     $app->get('/api/photos', new GetPhotosAction($photoIndexService, $mediaSourceAvailabilityService));
     $app->get('/api/albums', new GetAlbumsAction($albumIndexService, $mediaSourceAvailabilityService));
     $app->get('/api/media-sources', new GetMediaSourceStatusAction($mediaSourceAvailabilityService));
+    $app->post('/upload', new UploadPhotosAction(
+        new PhotoUploadService(
+            $photosDirectory,
+            $uploadScriptPath ?? dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . 'script' . DIRECTORY_SEPARATOR . 'upload_r2.py',
+            $uploadPythonBinary,
+        ),
+        $photoCache,
+    ));
 
     $app->get('/media/{path:.*}', static function (Request $request, Response $response, array $args) use ($photosDirectory): Response {
         $relativePath = trim((string) ($args['path'] ?? ''), '/');
@@ -143,11 +156,21 @@ function createApp(
             return $response->withStatus(304);
         }
 
-        $mimeType = mime_content_type($path) ?: '';
+        $mimeType = function_exists('mime_content_type') ? (mime_content_type($path) ?: '') : '';
         $extension = strtolower(pathinfo($path, PATHINFO_EXTENSION));
 
         if ($extension === 'avif' && !str_starts_with($mimeType, 'image/')) {
             $mimeType = 'image/avif';
+        } elseif ($extension === 'heic' && !str_starts_with($mimeType, 'image/')) {
+            $mimeType = 'image/heic';
+        } elseif ($extension === 'svg' && !str_starts_with($mimeType, 'image/')) {
+            $mimeType = 'image/svg+xml';
+        } elseif ($extension === 'png' && !str_starts_with($mimeType, 'image/')) {
+            $mimeType = 'image/png';
+        } elseif (in_array($extension, ['jpg', 'jpeg'], true) && !str_starts_with($mimeType, 'image/')) {
+            $mimeType = 'image/jpeg';
+        } elseif ($extension === 'webp' && !str_starts_with($mimeType, 'image/')) {
+            $mimeType = 'image/webp';
         }
 
         if ($mimeType === '') {

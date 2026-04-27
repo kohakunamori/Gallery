@@ -21,9 +21,11 @@ final class PhotoScannerTest extends TestCase
         file_put_contents($directory . '/travel/cover.png', 'cover');
         file_put_contents($directory . '/family/portrait.webp', 'portrait');
         file_put_contents($directory . '/family/lossless.avif', 'lossless');
+        file_put_contents($directory . '/family/animation.gif', 'animation');
+        file_put_contents($directory . '/family/vector.svg', 'vector');
+        file_put_contents($directory . '/family/original.heic', 'original');
         file_put_contents($directory . '/travel/day-1/deep.jpeg', 'deep');
         file_put_contents($directory . '/notes.txt', 'notes');
-        file_put_contents($directory . '/family/skip.gif', 'skip');
 
         $scanner = new PhotoScanner();
 
@@ -38,12 +40,24 @@ final class PhotoScannerTest extends TestCase
         self::assertSame(
             [
                 [
+                    'absolutePath' => str_replace('\\', '/', $directory . '/family/animation.gif'),
+                    'relativePath' => 'family/animation.gif',
+                ],
+                [
                     'absolutePath' => str_replace('\\', '/', $directory . '/family/lossless.avif'),
                     'relativePath' => 'family/lossless.avif',
                 ],
                 [
+                    'absolutePath' => str_replace('\\', '/', $directory . '/family/original.heic'),
+                    'relativePath' => 'family/original.heic',
+                ],
+                [
                     'absolutePath' => str_replace('\\', '/', $directory . '/family/portrait.webp'),
                     'relativePath' => 'family/portrait.webp',
+                ],
+                [
+                    'absolutePath' => str_replace('\\', '/', $directory . '/family/vector.svg'),
+                    'relativePath' => 'family/vector.svg',
                 ],
                 [
                     'absolutePath' => str_replace('\\', '/', $directory . '/root.jpg'),

@@ -14,4 +14,8 @@ final class NullPhotoCache implements PhotoCacheInterface
     public function put(string $key, array $value, int $ttlSeconds): void
     {
     }
+
+    public function clear(): void
+    {
+    }
 }

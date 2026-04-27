@@ -15,4 +15,6 @@ interface PhotoCacheInterface
      * @param list<array{id:string,filename:string,url:string,thumbnailUrl:string,takenAt:?string,sortTime:string,width:?int,height:?int}> $value
      */
     public function put(string $key, array $value, int $ttlSeconds): void;
+
+    public function clear(): void;
 }

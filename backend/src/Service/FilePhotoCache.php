@@ -49,6 +49,15 @@ final class FilePhotoCache implements PhotoCacheInterface
         );
     }
 
+    public function clear(): void
+    {
+        foreach (glob(rtrim($this->cacheDirectory, '/\\') . DIRECTORY_SEPARATOR . '*.json') ?: [] as $path) {
+            if (is_file($path)) {
+                @unlink($path);
+            }
+        }
+    }
+
     private function pathFor(string $key): string
     {
         return rtrim($this->cacheDirectory, '/\\') . DIRECTORY_SEPARATOR . sha1($key) . '.json';

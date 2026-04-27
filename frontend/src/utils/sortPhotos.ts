@@ -1,5 +1,5 @@
 import type { Photo } from '../types/photo';
-import type { GallerySortPreference } from '../components/exhibition/GallerySettingsModal';
+import type { GallerySortPreference } from './gallerySettings';
 
 export function sortPhotos(photos: Photo[], sortPreference: GallerySortPreference) {
   const sortedPhotos = [...photos];
