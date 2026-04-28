@@ -382,10 +382,12 @@ final class PhotoUploadService
         $openPipes = ['stdout' => $pipes[1], 'stderr' => $pipes[2]];
 
         $timedOut = false;
+        $statusExitCode = null;
 
         do {
             $status = proc_get_status($process);
             $processRunning = $status['running'] ?? false;
+            $statusExitCode = $this->resolveProcessStatusExitCode($status) ?? $statusExitCode;
 
             if ($this->scriptTimeoutSeconds > 0 && microtime(true) - $startedAt > $this->scriptTimeoutSeconds) {
                 $timedOut = true;
@@ -436,6 +438,10 @@ final class PhotoUploadService
 
         $exitCode = proc_close($process);
 
+        if ($exitCode === -1 && $statusExitCode !== null) {
+            $exitCode = $statusExitCode;
+        }
+
         if ($timedOut) {
             throw new RuntimeException(sprintf('Remote upload timed out after %d seconds.', $this->scriptTimeoutSeconds));
         }
@@ -449,6 +455,22 @@ final class PhotoUploadService
         }
 
         return $output;
+    }
+
+    /**
+     * @param array<string,mixed> $status
+     */
+    private function resolveProcessStatusExitCode(array $status): ?int
+    {
+        foreach (['cached_exitcode', 'exitcode'] as $key) {
+            $exitCode = $status[$key] ?? null;
+
+            if (is_int($exitCode) && $exitCode >= 0) {
+                return $exitCode;
+            }
+        }
+
+        return null;
     }
 
     /**

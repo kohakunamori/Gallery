@@ -301,6 +301,16 @@ final class PhotoUploadServiceTest extends TestCase
         }
     }
 
+    public function testItResolvesCachedProcessStatusExitCode(): void
+    {
+        $service = new PhotoUploadService(sys_get_temp_dir(), __FILE__, PHP_BINARY);
+        $resolveProcessStatusExitCode = new \ReflectionMethod($service, 'resolveProcessStatusExitCode');
+
+        self::assertSame(0, $resolveProcessStatusExitCode->invoke($service, ['exitcode' => -1, 'cached_exitcode' => 0]));
+        self::assertSame(7, $resolveProcessStatusExitCode->invoke($service, ['exitcode' => 7]));
+        self::assertNull($resolveProcessStatusExitCode->invoke($service, ['exitcode' => -1]));
+    }
+
     public function testItTruncatesExcessiveScriptOutput(): void
     {
         $photosDirectory = $this->createTempDirectory('gallery-upload-photos-');
