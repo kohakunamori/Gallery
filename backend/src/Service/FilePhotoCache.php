@@ -52,7 +52,7 @@ final class FilePhotoCache implements PhotoCacheInterface
     public function clear(): void
     {
         foreach (glob(rtrim($this->cacheDirectory, '/\\') . DIRECTORY_SEPARATOR . '*.json') ?: [] as $path) {
-            if (is_file($path)) {
+            if (is_file($path) && preg_match('/^[a-f0-9]{40}\.json$/', basename($path)) === 1) {
                 @unlink($path);
             }
         }

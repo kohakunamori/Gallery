@@ -25,6 +25,13 @@ $app = createApp(
     null,
     $uploadConfig['scriptEnvFile'],
     $uploadConfig['temporaryDirectory'],
+    $uploadConfig['accessToken'],
+    $uploadConfig['maxFiles'],
+    $uploadConfig['maxFileBytes'],
+    $uploadConfig['maxTotalBytes'],
+    $uploadConfig['scriptTimeoutSeconds'],
+    $uploadConfig['scriptMaxOutputLines'],
+    $uploadConfig['scriptMaxOutputBytes'],
 );
 
 $app->run();

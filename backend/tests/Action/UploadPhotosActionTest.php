@@ -40,12 +40,108 @@ final class UploadPhotosActionTest extends TestCase
         $this->removeDirectory($cacheDirectory);
     }
 
-    public function testItClearsCacheOnlyAfterSuccessfulUpload(): void
+    public function testItRejectsMissingUploadTokenWhenConfigured(): void
+    {
+        $photosDirectory = $this->createTempDirectory('gallery-upload-action-photos-');
+
+        try {
+            $app = createApp(
+                $photosDirectory,
+                '/media',
+                null,
+                true,
+                '/media',
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                'secret-token',
+            );
+            $request = (new ServerRequestFactory())->createServerRequest('POST', '/upload');
+
+            $response = $app->handle($request);
+            $payload = json_decode((string) $response->getBody(), true, 512, JSON_THROW_ON_ERROR);
+
+            self::assertSame(401, $response->getStatusCode());
+            self::assertSame(['error' => 'Upload token is required or invalid.'], $payload);
+        } finally {
+            $this->removeDirectory($photosDirectory);
+        }
+    }
+
+    public function testItAcceptsConfiguredUploadToken(): void
+    {
+        $photosDirectory = $this->createTempDirectory('gallery-upload-action-photos-');
+        $scriptDirectory = $this->createTempDirectory('gallery-upload-action-script-');
+        $scriptPath = $scriptDirectory . '/upload_r2.php';
+        file_put_contents($scriptPath, $this->phpUploadScriptStub($scriptDirectory . '/upload.log'));
+
+        try {
+            $app = createApp(
+                $photosDirectory,
+                '/media',
+                null,
+                true,
+                '/media',
+                null,
+                null,
+                null,
+                null,
+                null,
+                $scriptPath,
+                PHP_BINARY,
+                null,
+                null,
+                'secret-token',
+            );
+            $request = (new ServerRequestFactory())
+                ->createServerRequest('POST', '/upload')
+                ->withHeader('X-Upload-Token', 'secret-token')
+                ->withUploadedFiles([
+                    'file' => $this->uploadedFile($photosDirectory, 'source.png', 'source.png', $this->validPngContents()),
+                ]);
+
+            $response = $app->handle($request);
+            $events = $this->decodeNdjson((string) $response->getBody());
+
+            self::assertSame(200, $response->getStatusCode());
+            self::assertSame('complete', $events[array_key_last($events)]['type']);
+        } finally {
+            $this->removeDirectory($photosDirectory);
+            $this->removeDirectory($scriptDirectory);
+        }
+    }
+
+    public function testItRejectsCrossSiteBrowserUploads(): void
+    {
+        $photosDirectory = $this->createTempDirectory('gallery-upload-action-photos-');
+        $app = createApp($photosDirectory, '/media', null, true);
+        $request = (new ServerRequestFactory())
+            ->createServerRequest('POST', '/upload')
+            ->withHeader('Sec-Fetch-Site', 'cross-site');
+
+        $response = $app->handle($request);
+        $payload = json_decode((string) $response->getBody(), true, 512, JSON_THROW_ON_ERROR);
+
+        self::assertSame(403, $response->getStatusCode());
+        self::assertSame(['error' => 'Cross-site uploads are not allowed.'], $payload);
+
+        $this->removeDirectory($photosDirectory);
+    }
+
+    public function testItClearsOnlyPhotoCacheAfterSuccessfulUpload(): void
     {
         $photosDirectory = $this->createTempDirectory('gallery-upload-action-photos-');
         $cacheDirectory = $this->createTempDirectory('gallery-upload-action-cache-');
         $cache = new FilePhotoCache($cacheDirectory);
         $cache->put('photos:r2', [['id' => 'stale']], 300);
+        $qiniuUsageCache = $cacheDirectory . '/qiniu-usage.json';
+        file_put_contents($qiniuUsageCache, '{}');
 
         $scriptDirectory = $this->createTempDirectory('gallery-upload-action-script-');
         $scriptPath = $scriptDirectory . '/upload_r2.php';
@@ -69,7 +165,7 @@ final class UploadPhotosActionTest extends TestCase
             $request = (new ServerRequestFactory())
                 ->createServerRequest('POST', '/upload')
                 ->withUploadedFiles([
-                    'file' => $this->uploadedFile($photosDirectory, 'source.webp', 'source.webp', 'image-body'),
+                    'file' => $this->uploadedFile($photosDirectory, 'source.png', 'source.png', $this->validPngContents()),
                 ]);
 
             $response = $app->handle($request);
@@ -79,15 +175,16 @@ final class UploadPhotosActionTest extends TestCase
             self::assertSame(200, $response->getStatusCode());
             self::assertSame('application/x-ndjson', $response->getHeaderLine('Content-Type'));
             self::assertSame('file', $events[0]['type']);
-            self::assertSame('source.webp', $events[0]['file']['name']);
+            self::assertSame('source.png', $events[0]['file']['name']);
             self::assertSame('output', $events[1]['type']);
             self::assertSame('stub upload ok', $events[1]['line']);
             self::assertSame('complete', $completeEvent['type']);
-            self::assertSame('source.webp', $completeEvent['files'][0]['name']);
+            self::assertSame('source.png', $completeEvent['files'][0]['name']);
             self::assertMatchesRegularExpression('#^source-\d{8}-\d{6}-[a-f0-9]{8}\.avif$#', $completeEvent['files'][0]['path']);
             self::assertFileDoesNotExist($photosDirectory . '/' . $events[0]['file']['path']);
             self::assertSame(['stub upload ok'], $completeEvent['output']);
             self::assertNull($cache->get('photos:r2'));
+            self::assertFileExists($qiniuUsageCache);
         } finally {
             $this->removeDirectory($photosDirectory);
             $this->removeDirectory($cacheDirectory);
@@ -121,7 +218,7 @@ final class UploadPhotosActionTest extends TestCase
                 ->createServerRequest('POST', '/upload')
                 ->withUploadedFiles([
                     'files' => [
-                        'nested' => [$this->uploadedFile($photosDirectory, 'nested.avif', 'nested.avif', 'image-body')],
+                        'nested' => [$this->uploadedFile($photosDirectory, 'nested.png', 'nested.png', $this->validPngContents())],
                     ],
                 ]);
 
@@ -130,7 +227,7 @@ final class UploadPhotosActionTest extends TestCase
             $completeEvent = $events[array_key_last($events)];
 
             self::assertSame(200, $response->getStatusCode());
-            self::assertSame('nested.avif', $completeEvent['files'][0]['name']);
+            self::assertSame('nested.png', $completeEvent['files'][0]['name']);
         } finally {
             $this->removeDirectory($photosDirectory);
             $this->removeDirectory($scriptDirectory);
@@ -167,7 +264,7 @@ final class UploadPhotosActionTest extends TestCase
             $request = (new ServerRequestFactory())
                 ->createServerRequest('POST', '/upload')
                 ->withUploadedFiles([
-                    'file' => $this->uploadedFile($photosDirectory, 'source.webp', 'source.webp', 'image-body'),
+                    'file' => $this->uploadedFile($photosDirectory, 'source.png', 'source.png', $this->validPngContents()),
                 ]);
 
             $response = $app->handle($request);
@@ -213,7 +310,7 @@ final class UploadPhotosActionTest extends TestCase
             $request = (new ServerRequestFactory())
                 ->createServerRequest('POST', '/upload')
                 ->withUploadedFiles([
-                    'file' => $this->uploadedFile($photosDirectory, 'source.webp', 'source.webp', 'image-body'),
+                    'file' => $this->uploadedFile($photosDirectory, 'source.png', 'source.png', $this->validPngContents()),
                 ]);
 
             $response = $app->handle($request);
@@ -249,6 +346,17 @@ final class UploadPhotosActionTest extends TestCase
         file_put_contents($path, $contents);
 
         return new UploadedFile($path, $clientName, 'image/' . pathinfo($clientName, PATHINFO_EXTENSION), filesize($path), UPLOAD_ERR_OK);
+    }
+
+    private function validPngContents(): string
+    {
+        $contents = base64_decode(
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+XnB8AAAAASUVORK5CYII=',
+            true,
+        );
+        self::assertNotFalse($contents);
+
+        return $contents;
     }
 
     private function phpUploadScriptStub(string $logPath, int $exitCode = 0, string $output = "stub upload ok\n"): string

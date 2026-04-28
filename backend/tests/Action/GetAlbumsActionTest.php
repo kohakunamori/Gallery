@@ -109,6 +109,7 @@ final class GetAlbumsActionTest extends TestCase
         self::assertSame(200, $svgResponse->getStatusCode());
         self::assertSame('image/svg+xml', $svgResponse->getHeaderLine('Content-Type'));
 
+        unset($heicResponse, $svgResponse);
         $this->removeDirectory($directory);
     }
 

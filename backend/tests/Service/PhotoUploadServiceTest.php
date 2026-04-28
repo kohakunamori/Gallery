@@ -24,16 +24,17 @@ final class PhotoUploadServiceTest extends TestCase
 
         $temporaryDirectoryRoot = $this->createTempDirectory('gallery-upload-batches-');
         $service = new PhotoUploadService($photosDirectory, $scriptPath, PHP_BINARY, null, $temporaryDirectoryRoot);
-        $sourcePath = $scriptDirectory . '/source.avif';
-        file_put_contents($sourcePath, 'image-body');
+        $sourcePath = $scriptDirectory . '/source.png';
+        file_put_contents($sourcePath, $this->validPngContents());
+        $sourceSize = filesize($sourcePath);
 
         $result = $service->upload([
-            new UploadedFile($sourcePath, 'unsafe name.avif', 'image/avif', filesize($sourcePath), UPLOAD_ERR_OK),
+            new UploadedFile($sourcePath, 'unsafe name.png', 'image/png', $sourceSize, UPLOAD_ERR_OK),
         ]);
 
         self::assertCount(1, $result['files']);
-        self::assertSame('unsafe name.avif', $result['files'][0]['name']);
-        self::assertSame(strlen('image-body'), $result['files'][0]['size']);
+        self::assertSame('unsafe name.png', $result['files'][0]['name']);
+        self::assertSame($sourceSize, $result['files'][0]['size']);
         self::assertMatchesRegularExpression('#^unsafe-name-\d{8}-\d{6}-[a-f0-9]{8}\.avif$#', $result['files'][0]['path']);
         self::assertFileDoesNotExist($photosDirectory . '/' . $result['files'][0]['path']);
         self::assertSame(['remote upload ok'], $result['output']);
@@ -76,12 +77,12 @@ final class PhotoUploadServiceTest extends TestCase
         file_put_contents($envFile, "R2_BUCKET=example\n");
 
         $service = new PhotoUploadService($photosDirectory, $scriptPath, PHP_BINARY, $envFile);
-        $sourcePath = $scriptDirectory . '/source.webp';
-        file_put_contents($sourcePath, 'image-body');
+        $sourcePath = $scriptDirectory . '/source.png';
+        file_put_contents($sourcePath, $this->validPngContents());
 
         try {
             $service->upload([
-                new UploadedFile($sourcePath, 'source.webp', 'image/webp', filesize($sourcePath), UPLOAD_ERR_OK),
+                new UploadedFile($sourcePath, 'source.png', 'image/png', filesize($sourcePath), UPLOAD_ERR_OK),
             ]);
 
             $commandArguments = json_decode((string) file_get_contents($pythonLog), true, 512, JSON_THROW_ON_ERROR);
@@ -158,6 +159,121 @@ final class PhotoUploadServiceTest extends TestCase
         }
     }
 
+    public function testItRejectsSvgUploads(): void
+    {
+        $photosDirectory = $this->createTempDirectory('gallery-upload-photos-');
+        $scriptDirectory = $this->createTempDirectory('gallery-upload-script-');
+        $scriptPath = $scriptDirectory . '/upload_r2.php';
+        $sourcePath = $scriptDirectory . '/vector.svg';
+
+        file_put_contents($scriptPath, $this->phpUploadScriptStub($scriptDirectory . '/python.log'));
+        file_put_contents($sourcePath, '<svg></svg>');
+
+        $service = new PhotoUploadService($photosDirectory, $scriptPath, PHP_BINARY);
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Unsupported image format: vector.svg');
+
+        try {
+            $service->upload([
+                new UploadedFile($sourcePath, 'vector.svg', 'image/svg+xml', filesize($sourcePath), UPLOAD_ERR_OK),
+            ]);
+        } finally {
+            self::assertFileDoesNotExist($scriptDirectory . '/python.log');
+            $this->removeDirectory($photosDirectory);
+            $this->removeDirectory($scriptDirectory);
+        }
+    }
+
+    public function testItRejectsFakeImageContent(): void
+    {
+        $photosDirectory = $this->createTempDirectory('gallery-upload-photos-');
+        $scriptDirectory = $this->createTempDirectory('gallery-upload-script-');
+        $scriptPath = $scriptDirectory . '/upload_r2.php';
+        $sourcePath = $scriptDirectory . '/fake.png';
+
+        file_put_contents($scriptPath, $this->phpUploadScriptStub($scriptDirectory . '/python.log'));
+        file_put_contents($sourcePath, 'not actually a png');
+
+        $service = new PhotoUploadService($photosDirectory, $scriptPath, PHP_BINARY);
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Uploaded file is not a valid supported image: fake.png');
+
+        try {
+            $service->upload([
+                new UploadedFile($sourcePath, 'fake.png', 'image/png', filesize($sourcePath), UPLOAD_ERR_OK),
+            ]);
+        } finally {
+            self::assertFileDoesNotExist($scriptDirectory . '/python.log');
+            $this->removeDirectory($photosDirectory);
+            $this->removeDirectory($scriptDirectory);
+        }
+    }
+
+    public function testItRejectsTooManyFiles(): void
+    {
+        $photosDirectory = $this->createTempDirectory('gallery-upload-photos-');
+        $scriptDirectory = $this->createTempDirectory('gallery-upload-script-');
+        $scriptPath = $scriptDirectory . '/upload_r2.php';
+        file_put_contents($scriptPath, $this->phpUploadScriptStub($scriptDirectory . '/python.log'));
+
+        $firstPath = $scriptDirectory . '/first.png';
+        $secondPath = $scriptDirectory . '/second.png';
+        file_put_contents($firstPath, $this->validPngContents());
+        file_put_contents($secondPath, $this->validPngContents());
+
+        $service = new PhotoUploadService($photosDirectory, $scriptPath, PHP_BINARY, null, null, 1);
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Too many files were uploaded. The maximum is 1.');
+
+        try {
+            $service->upload([
+                new UploadedFile($firstPath, 'first.png', 'image/png', filesize($firstPath), UPLOAD_ERR_OK),
+                new UploadedFile($secondPath, 'second.png', 'image/png', filesize($secondPath), UPLOAD_ERR_OK),
+            ]);
+        } finally {
+            $this->removeDirectory($photosDirectory);
+            $this->removeDirectory($scriptDirectory);
+        }
+    }
+
+    public function testItRejectsOversizedFilesAndBatches(): void
+    {
+        $photosDirectory = $this->createTempDirectory('gallery-upload-photos-');
+        $scriptDirectory = $this->createTempDirectory('gallery-upload-script-');
+        $scriptPath = $scriptDirectory . '/upload_r2.php';
+        $sourcePath = $scriptDirectory . '/source.png';
+        file_put_contents($scriptPath, $this->phpUploadScriptStub($scriptDirectory . '/python.log'));
+        file_put_contents($sourcePath, $this->validPngContents());
+
+        $tooSmallForFile = new PhotoUploadService($photosDirectory, $scriptPath, PHP_BINARY, null, null, 20, 1);
+
+        try {
+            $tooSmallForFile->upload([
+                new UploadedFile($sourcePath, 'source.png', 'image/png', filesize($sourcePath), UPLOAD_ERR_OK),
+            ]);
+            self::fail('Expected oversized file rejection.');
+        } catch (RuntimeException $exception) {
+            self::assertSame('The uploaded file source.png is too large.', $exception->getMessage());
+        }
+
+        $tooSmallForBatch = new PhotoUploadService($photosDirectory, $scriptPath, PHP_BINARY, null, null, 20, 52428800, 1);
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('The uploaded batch is too large.');
+
+        try {
+            $tooSmallForBatch->upload([
+                new UploadedFile($sourcePath, 'source.png', 'image/png', filesize($sourcePath), UPLOAD_ERR_OK),
+            ]);
+        } finally {
+            $this->removeDirectory($photosDirectory);
+            $this->removeDirectory($scriptDirectory);
+        }
+    }
+
     public function testItStreamsUploadScriptOutput(): void
     {
         $photosDirectory = $this->createTempDirectory('gallery-upload-photos-');
@@ -185,6 +301,51 @@ final class PhotoUploadServiceTest extends TestCase
         }
     }
 
+    public function testItTruncatesExcessiveScriptOutput(): void
+    {
+        $photosDirectory = $this->createTempDirectory('gallery-upload-photos-');
+        $scriptDirectory = $this->createTempDirectory('gallery-upload-script-');
+        $scriptPath = $scriptDirectory . '/upload_r2.php';
+
+        file_put_contents($scriptPath, $this->phpUploadScriptStub($scriptDirectory . '/python.log', 0, "first line\nsecond line\n"));
+
+        $service = new PhotoUploadService($photosDirectory, $scriptPath, PHP_BINARY, null, null, 20, 52428800, 314572800, 600, 1);
+
+        try {
+            self::assertSame([
+                'first line',
+                'Upload output truncated after reaching the configured limit.',
+            ], $service->runUploadScriptStreaming());
+        } finally {
+            $this->removeDirectory($photosDirectory);
+            $this->removeDirectory($scriptDirectory);
+        }
+    }
+
+    public function testItTimesOutLongRunningScripts(): void
+    {
+        $photosDirectory = $this->createTempDirectory('gallery-upload-photos-');
+        $scriptDirectory = $this->createTempDirectory('gallery-upload-script-');
+        $scriptPath = $scriptDirectory . '/upload_r2.php';
+
+        file_put_contents($scriptPath, <<<'PHP'
+<?php
+sleep(2);
+PHP);
+
+        $service = new PhotoUploadService($photosDirectory, $scriptPath, PHP_BINARY, null, null, 20, 52428800, 314572800, 1);
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage('Remote upload timed out after 1 seconds.');
+
+        try {
+            $service->runUploadScriptStreaming();
+        } finally {
+            $this->removeDirectory($photosDirectory);
+            $this->removeDirectory($scriptDirectory);
+        }
+    }
+
     public function testItIncludesScriptOutputWhenRemoteUploadFails(): void
     {
         $photosDirectory = $this->createTempDirectory('gallery-upload-photos-');
@@ -194,15 +355,15 @@ final class PhotoUploadServiceTest extends TestCase
         file_put_contents($scriptPath, $this->phpUploadScriptStub($scriptDirectory . '/python.log', 7, "remote failed\n"));
 
         $service = new PhotoUploadService($photosDirectory, $scriptPath, PHP_BINARY);
-        $sourcePath = $scriptDirectory . '/source.webp';
-        file_put_contents($sourcePath, 'image-body');
+        $sourcePath = $scriptDirectory . '/source.png';
+        file_put_contents($sourcePath, $this->validPngContents());
 
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessage("Remote upload failed:\nremote failed");
 
         try {
             $service->upload([
-                new UploadedFile($sourcePath, 'source.webp', 'image/webp', filesize($sourcePath), UPLOAD_ERR_OK),
+                new UploadedFile($sourcePath, 'source.png', 'image/png', filesize($sourcePath), UPLOAD_ERR_OK),
             ]);
         } finally {
             $this->removeDirectory($photosDirectory);
@@ -219,15 +380,15 @@ final class PhotoUploadServiceTest extends TestCase
         file_put_contents($scriptPath, $this->phpUploadScriptStub($scriptDirectory . '/python.log'));
 
         $service = new PhotoUploadService($photosDirectory, $scriptPath, '__missing_python_binary__');
-        $sourcePath = $scriptDirectory . '/source.webp';
-        file_put_contents($sourcePath, 'image-body');
+        $sourcePath = $scriptDirectory . '/source.png';
+        file_put_contents($sourcePath, $this->validPngContents());
 
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessage('Python interpreter is unavailable');
 
         try {
             $service->upload([
-                new UploadedFile($sourcePath, 'source.webp', 'image/webp', filesize($sourcePath), UPLOAD_ERR_OK),
+                new UploadedFile($sourcePath, 'source.png', 'image/png', filesize($sourcePath), UPLOAD_ERR_OK),
             ]);
         } finally {
             $this->removeDirectory($photosDirectory);
@@ -241,6 +402,17 @@ final class PhotoUploadServiceTest extends TestCase
         mkdir($directory, 0777, true);
 
         return $directory;
+    }
+
+    private function validPngContents(): string
+    {
+        $contents = base64_decode(
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+XnB8AAAAASUVORK5CYII=',
+            true,
+        );
+        self::assertNotFalse($contents);
+
+        return $contents;
     }
 
     private function phpUploadScriptStub(string $logPath, int $exitCode = 0, string $output = ''): string

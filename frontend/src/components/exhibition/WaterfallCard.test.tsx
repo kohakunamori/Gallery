@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   cachePhotoImageForTest,
   getCachedPhotoImageUrl,
+  isImagePreloaded,
   markImageAsPreloadedForTest,
   resetPreloadedImages,
   WaterfallCard,
@@ -196,5 +197,14 @@ describe('WaterfallCard', () => {
     });
 
     expect(screen.getByRole('img', { name: 'one.jpg' })).toHaveClass('opacity-100');
+  });
+
+  it('evicts old preloaded image urls after the cache cap', () => {
+    for (let index = 0; index < 801; index += 1) {
+      markImageAsPreloadedForTest(`/media/${index}.jpg`);
+    }
+
+    expect(isImagePreloaded('/media/0.jpg')).toBe(false);
+    expect(isImagePreloaded('/media/800.jpg')).toBe(true);
   });
 });

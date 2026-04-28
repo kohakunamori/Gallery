@@ -1,8 +1,9 @@
-import { type ChangeEvent, type FormEvent, useMemo, useState } from 'react';
+import { type ChangeEvent, type FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { uploadPhotos, type UploadPhotosResponse } from '../services/uploadPhotos';
 
-const ACCEPTED_IMAGE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'tiff', 'svg', 'avif', 'heic'];
+const ACCEPTED_IMAGE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'tiff', 'avif', 'heic'];
 const ACCEPT_ATTRIBUTE = ACCEPTED_IMAGE_EXTENSIONS.map((extension) => `.${extension}`).join(',');
+const MAX_VISIBLE_OUTPUT_LINES = 200;
 
 function formatBytes(size: number): string {
   if (size < 1024) {
@@ -22,7 +23,15 @@ function getExtension(filename: string): string {
   return extension === undefined || extension === filename ? 'unknown' : extension.toLowerCase();
 }
 
-function UploadScriptOutput({ lines }: { lines: string[] }) {
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === 'AbortError';
+}
+
+function trimOutputLines(lines: string[]): string[] {
+  return lines.slice(-MAX_VISIBLE_OUTPUT_LINES);
+}
+
+function UploadScriptOutput({ hiddenLineCount, lines }: { hiddenLineCount: number; lines: string[] }) {
   if (lines.length === 0) {
     return null;
   }
@@ -30,6 +39,9 @@ function UploadScriptOutput({ lines }: { lines: string[] }) {
   return (
     <div className="mt-5" aria-live="polite">
       <h3 className="text-sm font-semibold text-on-surface">Upload script output</h3>
+      {hiddenLineCount > 0 && (
+        <p className="mt-2 text-xs text-on-surface-variant">Showing the last {MAX_VISIBLE_OUTPUT_LINES} lines; {hiddenLineCount} earlier lines hidden.</p>
+      )}
       <pre className="mt-3 max-h-80 overflow-auto whitespace-pre-wrap rounded-2xl bg-on-surface p-4 text-xs leading-6 text-surface-container-lowest">
         {lines.join('\n')}
       </pre>
@@ -39,16 +51,38 @@ function UploadScriptOutput({ lines }: { lines: string[] }) {
 
 export function UploadPage() {
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
-  const [status, setStatus] = useState<'idle' | 'uploading' | 'success' | 'error'>('idle');
+  const [status, setStatus] = useState<'idle' | 'uploading' | 'success' | 'error' | 'canceled'>('idle');
   const [result, setResult] = useState<UploadPhotosResponse | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [scriptOutput, setScriptOutput] = useState<string[]>([]);
+  const [hiddenOutputLineCount, setHiddenOutputLineCount] = useState(0);
+  const [uploadToken, setUploadToken] = useState('');
+  const activeUploadControllerRef = useRef<AbortController | null>(null);
   const totalSize = useMemo(
     () => selectedFiles.reduce((sum, file) => sum + file.size, 0),
     [selectedFiles],
   );
 
+  useEffect(() => () => {
+    activeUploadControllerRef.current?.abort();
+  }, []);
+
+  const appendScriptOutput = (line: string) => {
+    setScriptOutput((currentOutput) => {
+      const nextOutput = [...currentOutput, line];
+      const hiddenLineCount = Math.max(0, nextOutput.length - MAX_VISIBLE_OUTPUT_LINES);
+      setHiddenOutputLineCount((currentHiddenLineCount) => currentHiddenLineCount + hiddenLineCount);
+
+      return trimOutputLines(nextOutput);
+    });
+  };
+
+  const cancelActiveUpload = () => {
+    activeUploadControllerRef.current?.abort();
+  };
+
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+    cancelActiveUpload();
     const nextFiles = Array.from(event.target.files ?? []);
 
     setSelectedFiles(nextFiles);
@@ -56,6 +90,7 @@ export function UploadPage() {
     setResult(null);
     setErrorMessage(null);
     setScriptOutput([]);
+    setHiddenOutputLineCount(0);
 
     if (nextFiles.length > 0) {
       event.currentTarget.value = '';
@@ -70,24 +105,45 @@ export function UploadPage() {
       setErrorMessage('Choose one or more image files before uploading.');
       setResult(null);
       setScriptOutput([]);
+      setHiddenOutputLineCount(0);
       return;
     }
 
+    cancelActiveUpload();
+    const controller = new AbortController();
+    activeUploadControllerRef.current = controller;
     setStatus('uploading');
     setErrorMessage(null);
     setResult(null);
     setScriptOutput([]);
+    setHiddenOutputLineCount(0);
 
     try {
       const nextResult = await uploadPhotos(selectedFiles, {
-        onOutput: (line) => setScriptOutput((currentOutput) => [...currentOutput, line]),
+        signal: controller.signal,
+        uploadToken,
+        onOutput: (line) => appendScriptOutput(line),
       });
 
-      setResult(nextResult);
+      setResult({
+        ...nextResult,
+        output: trimOutputLines(nextResult.output),
+      });
       setStatus('success');
     } catch (error: unknown) {
+      if (isAbortError(error)) {
+        setStatus('canceled');
+        setErrorMessage(null);
+        setResult(null);
+        return;
+      }
+
       setStatus('error');
       setErrorMessage(error instanceof Error ? error.message : 'Upload failed.');
+    } finally {
+      if (activeUploadControllerRef.current === controller) {
+        activeUploadControllerRef.current = null;
+      }
     }
   };
 
@@ -126,6 +182,18 @@ export function UploadPage() {
               />
             </label>
 
+            <label className="block rounded-[24px] bg-surface-container-low p-5">
+              <span className="block text-sm font-semibold text-on-surface">Upload token</span>
+              <span className="mt-1 block text-xs text-on-surface-variant">Required only when the server is configured with one.</span>
+              <input
+                className="mt-3 block w-full rounded-2xl border border-outline-variant bg-surface-container-lowest px-4 py-3 text-sm text-on-surface"
+                type="password"
+                autoComplete="off"
+                value={uploadToken}
+                onChange={(event) => setUploadToken(event.target.value)}
+              />
+            </label>
+
             {selectedFiles.length > 0 && (
               <section className="rounded-[24px] bg-surface-container-low p-5" aria-label="Selected files">
                 <div className="flex flex-wrap items-center justify-between gap-3">
@@ -148,15 +216,33 @@ export function UploadPage() {
               </section>
             )}
 
-            <button
-              className="inline-flex min-h-12 items-center justify-center rounded-full bg-primary px-6 text-sm font-semibold text-white transition hover:bg-primary-container disabled:cursor-not-allowed disabled:bg-outline disabled:text-surface-container-lowest"
-              type="submit"
-              disabled={status === 'uploading'}
-            >
-              {status === 'uploading' ? 'Uploading…' : 'Upload selected files'}
-            </button>
+            <div className="flex flex-wrap gap-3">
+              <button
+                className="inline-flex min-h-12 items-center justify-center rounded-full bg-primary px-6 text-sm font-semibold text-white transition hover:bg-primary-container disabled:cursor-not-allowed disabled:bg-outline disabled:text-surface-container-lowest"
+                type="submit"
+                disabled={status === 'uploading'}
+              >
+                {status === 'uploading' ? 'Uploading…' : 'Upload selected files'}
+              </button>
+              {status === 'uploading' && (
+                <button
+                  className="inline-flex min-h-12 items-center justify-center rounded-full border border-outline-variant px-6 text-sm font-semibold text-on-surface transition hover:bg-surface-container"
+                  type="button"
+                  onClick={cancelActiveUpload}
+                >
+                  Cancel upload
+                </button>
+              )}
+            </div>
           </form>
         </div>
+
+        {status === 'canceled' && (
+          <section className="mt-6 rounded-[24px] bg-surface-container-lowest p-5 shadow-ambient" role="status">
+            <h2 className="font-semibold">Upload canceled</h2>
+            <p className="mt-2 text-sm text-on-surface-variant">The active upload was canceled before completion.</p>
+          </section>
+        )}
 
         {status === 'error' && errorMessage !== null && (
           <section className="mt-6 rounded-[24px] border border-red-200 bg-red-50 p-5 text-red-800" role="alert">
@@ -167,7 +253,7 @@ export function UploadPage() {
 
         {(status === 'uploading' || status === 'error') && scriptOutput.length > 0 && (
           <section className="mt-6 rounded-[24px] bg-surface-container-lowest p-5 shadow-ambient">
-            <UploadScriptOutput lines={scriptOutput} />
+            <UploadScriptOutput hiddenLineCount={hiddenOutputLineCount} lines={scriptOutput} />
           </section>
         )}
 
@@ -185,7 +271,7 @@ export function UploadPage() {
               ))}
             </ul>
 
-            <UploadScriptOutput lines={result.output.length > 0 ? result.output : scriptOutput} />
+            <UploadScriptOutput hiddenLineCount={hiddenOutputLineCount} lines={result.output.length > 0 ? result.output : scriptOutput} />
           </section>
         )}
       </section>

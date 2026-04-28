@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ExhibitionHeader } from '../components/exhibition/ExhibitionHeader';
 import { ExhibitionHero } from '../components/exhibition/ExhibitionHero';
 import { ExhibitionSection } from '../components/exhibition/ExhibitionSection';
@@ -312,12 +312,12 @@ export function ExhibitionPage() {
 
   const hasMorePhotos = visibleCount < sortedPhotos.length;
 
-  const loadMore = () => {
+  const loadMore = useCallback(() => {
     if (!hasMorePhotos) {
       return;
     }
     setVisibleCount((current) => Math.min(current + LOAD_MORE_COUNT, sortedPhotos.length));
-  };
+  }, [hasMorePhotos, sortedPhotos.length]);
 
   const openPhoto = (photoId: string) => {
     setSelectedPhotoId(photoId);

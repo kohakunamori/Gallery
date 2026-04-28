@@ -1,13 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { uploadPhotos } from './uploadPhotos';
 
-function streamResponse(lines: string[]): ReadableStream<Uint8Array> {
+function streamResponse(chunks: string[]): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
 
   return new ReadableStream({
     start(controller) {
-      for (const line of lines) {
-        controller.enqueue(encoder.encode(line));
+      for (const chunk of chunks) {
+        controller.enqueue(encoder.encode(chunk));
       }
 
       controller.close();
@@ -48,6 +48,22 @@ describe('uploadPhotos', () => {
     expect(body.getAll('files')).toEqual([file]);
   });
 
+  it('sends an upload token when provided', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: new Headers({ 'Content-Type': 'application/json' }),
+      json: async () => ({ files: [], output: [] }),
+    });
+
+    vi.stubGlobal('fetch', fetchMock);
+
+    await uploadPhotos([new File(['body'], 'fresh.avif')], { uploadToken: ' secret ' });
+
+    expect(fetchMock).toHaveBeenCalledWith('/upload', expect.objectContaining({
+      headers: { 'X-Upload-Token': 'secret' },
+    }));
+  });
+
   it('streams script output and resolves with the complete event', async () => {
     const onOutput = vi.fn();
 
@@ -74,6 +90,28 @@ describe('uploadPhotos', () => {
     expect(onOutput).toHaveBeenCalledWith('uploading r2', 'stdout');
   });
 
+  it('parses ndjson events split across chunk boundaries', async () => {
+    const completeEvent = JSON.stringify({
+      type: 'complete',
+      files: [{ name: 'fresh.webp', path: 'uploads/fresh.webp', size: 4 }],
+      output: [],
+    }) + '\n';
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        headers: new Headers({ 'Content-Type': 'application/x-ndjson' }),
+        body: streamResponse([completeEvent.slice(0, 20), completeEvent.slice(20)]),
+      }),
+    );
+
+    await expect(uploadPhotos([new File(['body'], 'fresh.webp')])).resolves.toEqual({
+      files: [{ name: 'fresh.webp', path: 'uploads/fresh.webp', size: 4 }],
+      output: [],
+    });
+  });
+
   it('reports invalid html lines in upload streams', async () => {
     vi.stubGlobal(
       'fetch',
@@ -87,6 +125,44 @@ describe('uploadPhotos', () => {
     await expect(uploadPhotos([new File(['body'], 'fresh.webp')])).rejects.toThrow(
       'Upload stream returned a server error: Fatal error',
     );
+  });
+
+  it('rejects malformed upload stream events', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        headers: new Headers({ 'Content-Type': 'application/x-ndjson' }),
+        body: streamResponse([JSON.stringify({ type: 'complete', files: [{ name: 'fresh.webp' }] }) + '\n']),
+      }),
+    );
+
+    await expect(uploadPhotos([new File(['body'], 'fresh.webp')])).rejects.toThrow(
+      'Upload stream contained an invalid complete event.',
+    );
+  });
+
+  it('retains only the latest streamed output lines', async () => {
+    const outputEvents = Array.from({ length: 502 }, (_, index) => (
+      JSON.stringify({ type: 'output', line: `line-${index}` }) + '\n'
+    ));
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        headers: new Headers({ 'Content-Type': 'application/x-ndjson' }),
+        body: streamResponse([
+          ...outputEvents,
+          JSON.stringify({ type: 'complete', files: [], output: undefined }) + '\n',
+        ]),
+      }),
+    );
+
+    await expect(uploadPhotos([new File(['body'], 'fresh.webp')])).resolves.toEqual({
+      files: [],
+      output: expect.arrayContaining(['line-2', 'line-501']),
+    });
   });
 
   it('rejects terminal stream errors after emitting script output', async () => {

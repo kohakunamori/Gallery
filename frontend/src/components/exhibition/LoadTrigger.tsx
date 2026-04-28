@@ -9,8 +9,13 @@ type LoadTriggerProps = {
 
 export function LoadTrigger({ disabled, isComplete, onLoadMore, resetKey = 0 }: LoadTriggerProps) {
   const triggerRef = useRef<HTMLDivElement | null>(null);
+  const onLoadMoreRef = useRef(onLoadMore);
   const hasTriggeredForCurrentEntryRef = useRef(false);
   const isIntersectingRef = useRef(false);
+
+  useEffect(() => {
+    onLoadMoreRef.current = onLoadMore;
+  }, [onLoadMore]);
 
   useEffect(() => {
     if (disabled || isComplete) {
@@ -21,9 +26,9 @@ export function LoadTrigger({ disabled, isComplete, onLoadMore, resetKey = 0 }: 
 
     if (isIntersectingRef.current) {
       hasTriggeredForCurrentEntryRef.current = true;
-      onLoadMore();
+      onLoadMoreRef.current();
     }
-  }, [disabled, isComplete, onLoadMore, resetKey]);
+  }, [disabled, isComplete, resetKey]);
 
   useEffect(() => {
     if (disabled || isComplete || triggerRef.current === null) {
@@ -49,13 +54,13 @@ export function LoadTrigger({ disabled, isComplete, onLoadMore, resetKey = 0 }: 
       }
 
       hasTriggeredForCurrentEntryRef.current = true;
-      onLoadMore();
+      onLoadMoreRef.current();
     }, { rootMargin: '1200px 0px' });
 
     observer.observe(triggerRef.current);
 
     return () => observer.disconnect();
-  }, [disabled, isComplete, onLoadMore]);
+  }, [disabled, isComplete]);
 
   if (isComplete) {
     return null;

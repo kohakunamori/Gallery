@@ -17,23 +17,26 @@ final class UploadPhotosAction
     public function __construct(
         private readonly PhotoUploadService $uploadService,
         private readonly PhotoCacheInterface $photoCache,
+        private readonly ?string $accessToken = null,
     ) {
     }
 
     public function __invoke(Request $request, Response $response): Response
     {
+        if ($request->getHeaderLine('Sec-Fetch-Site') === 'cross-site') {
+            return $this->jsonError($response, 403, 'Cross-site uploads are not allowed.');
+        }
+
+        if (!$this->isAuthorized($request)) {
+            return $this->jsonError($response, 401, 'Upload token is required or invalid.');
+        }
+
         $files = $this->extractFiles($request->getUploadedFiles());
 
         try {
             $uploadBatch = $this->uploadService->prepareUpload($files);
         } catch (Throwable $exception) {
-            $response->getBody()->write(
-                json_encode(['error' => $exception->getMessage()], JSON_THROW_ON_ERROR),
-            );
-
-            return $response
-                ->withStatus(400)
-                ->withHeader('Content-Type', 'application/json');
+            return $this->jsonError($response, 400, $exception->getMessage());
         }
 
         $stream = new CallbackStream(function () use ($uploadBatch): \Generator {
@@ -81,6 +84,33 @@ final class UploadPhotosAction
             ->withHeader('Content-Type', 'application/x-ndjson')
             ->withHeader('Cache-Control', 'no-cache')
             ->withHeader('X-Accel-Buffering', 'no');
+    }
+
+    private function isAuthorized(Request $request): bool
+    {
+        if ($this->accessToken === null || $this->accessToken === '') {
+            return true;
+        }
+
+        $providedToken = $request->getHeaderLine('X-Upload-Token');
+        $authorizationHeader = $request->getHeaderLine('Authorization');
+
+        if (str_starts_with($authorizationHeader, 'Bearer ')) {
+            $providedToken = substr($authorizationHeader, 7);
+        }
+
+        return $providedToken !== '' && hash_equals($this->accessToken, $providedToken);
+    }
+
+    private function jsonError(Response $response, int $status, string $message): Response
+    {
+        $response->getBody()->write(
+            json_encode(['error' => $message], JSON_THROW_ON_ERROR),
+        );
+
+        return $response
+            ->withStatus($status)
+            ->withHeader('Content-Type', 'application/json');
     }
 
     /**

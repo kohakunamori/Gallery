@@ -411,7 +411,9 @@ describe('ExhibitionPage', () => {
     expect(screen.queryByRole('heading', { name: 'March 2026' })).not.toBeInTheDocument();
 
     act(() => {
-      MockIntersectionObserver.instances.at(-1)?.trigger(true);
+      for (const instance of MockIntersectionObserver.instances) {
+        instance.trigger(true);
+      }
     });
 
     expect(await screen.findByRole('heading', { name: 'March 2026' })).toBeInTheDocument();

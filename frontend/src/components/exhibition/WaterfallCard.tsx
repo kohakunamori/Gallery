@@ -10,6 +10,7 @@ type WaterfallCardProps = {
 
 const IMAGE_ROOT_MARGIN = '1200px 0px';
 const MAX_CACHED_PHOTO_IMAGE_COUNT = 400;
+const MAX_PRELOADED_IMAGE_URL_COUNT = 800;
 const preloadedImageUrls = new Set<string>();
 const cachedImageUrlsByPhotoId = new Map<string, string>();
 
@@ -32,8 +33,21 @@ function trimCachedPhotoImages() {
   }
 }
 
+function trimPreloadedImageUrls() {
+  while (preloadedImageUrls.size > MAX_PRELOADED_IMAGE_URL_COUNT) {
+    const oldestUrl = preloadedImageUrls.keys().next().value;
+
+    if (oldestUrl === undefined) {
+      return;
+    }
+
+    preloadedImageUrls.delete(oldestUrl);
+  }
+}
+
 export function markPhotoImageAsLoaded(photoId: string, url: string) {
   preloadedImageUrls.add(url);
+  trimPreloadedImageUrls();
 
   if (cachedImageUrlsByPhotoId.get(photoId) === url) {
     return;
@@ -54,6 +68,7 @@ export function resetPreloadedImages() {
 
 export function markImageAsPreloadedForTest(url: string) {
   preloadedImageUrls.add(url);
+  trimPreloadedImageUrls();
 }
 
 export function cachePhotoImageForTest(photoId: string, url: string) {

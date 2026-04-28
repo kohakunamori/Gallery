@@ -10,8 +10,20 @@ use Throwable;
 
 final class PhotoUploadService
 {
-    private const ALLOWED_EXTENSIONS = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'tiff', 'svg', 'avif', 'heic'];
+    private const ALLOWED_EXTENSIONS = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'tiff', 'avif', 'heic'];
+    private const EXTENSION_MIME_TYPES = [
+        'jpg' => ['image/jpeg'],
+        'jpeg' => ['image/jpeg'],
+        'png' => ['image/png'],
+        'webp' => ['image/webp'],
+        'gif' => ['image/gif'],
+        'bmp' => ['image/bmp', 'image/x-ms-bmp'],
+        'tiff' => ['image/tiff'],
+        'avif' => ['image/avif'],
+        'heic' => ['image/heic', 'image/heif'],
+    ];
     private const TEMPORARY_UPLOAD_PREFIX = 'gallery-upload-batch-';
+    private const OUTPUT_TRUNCATION_LINE = 'Upload output truncated after reaching the configured limit.';
 
     public function __construct(
         private readonly string $photosDirectory,
@@ -19,6 +31,12 @@ final class PhotoUploadService
         private readonly ?string $pythonBinary = null,
         private readonly ?string $scriptEnvFile = null,
         private readonly ?string $temporaryDirectoryRoot = null,
+        private readonly int $maxFiles = 20,
+        private readonly int $maxFileBytes = 52428800,
+        private readonly int $maxTotalBytes = 314572800,
+        private readonly int $scriptTimeoutSeconds = 600,
+        private readonly int $maxOutputLines = 500,
+        private readonly int $maxOutputBytes = 262144,
     ) {
     }
 
@@ -82,6 +100,7 @@ final class PhotoUploadService
                     );
                 }
 
+                $this->validateStagedFileContent($temporaryPath, $validatedFile['extension'], $validatedFile['originalName']);
                 $size = filesize($temporaryPath);
 
                 $savedFiles[] = [
@@ -109,6 +128,7 @@ final class PhotoUploadService
     private function validateFiles(array $files): array
     {
         $validatedFiles = [];
+        $totalBytes = 0;
 
         foreach ($files as $file) {
             $originalName = $this->normalizeOriginalName($file->getClientFilename());
@@ -123,6 +143,26 @@ final class PhotoUploadService
                     $originalName,
                     $this->uploadErrorMessage($file->getError()),
                 ));
+            }
+
+            if (count($validatedFiles) >= $this->maxFiles) {
+                throw new RuntimeException(sprintf('Too many files were uploaded. The maximum is %d.', $this->maxFiles));
+            }
+
+            $size = $file->getSize();
+
+            if (!is_int($size) || $size < 0) {
+                throw new RuntimeException(sprintf('Unable to determine the uploaded file size for %s.', $originalName));
+            }
+
+            if ($size > $this->maxFileBytes) {
+                throw new RuntimeException(sprintf('The uploaded file %s is too large.', $originalName));
+            }
+
+            $totalBytes += $size;
+
+            if ($totalBytes > $this->maxTotalBytes) {
+                throw new RuntimeException('The uploaded batch is too large.');
             }
 
             $extension = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
@@ -140,6 +180,66 @@ final class PhotoUploadService
         }
 
         return $validatedFiles;
+    }
+
+    private function validateStagedFileContent(string $path, string $extension, string $originalName): void
+    {
+        $detectedTypes = [];
+
+        if (function_exists('finfo_open')) {
+            $fileInfo = finfo_open(FILEINFO_MIME_TYPE);
+
+            if ($fileInfo !== false) {
+                $mimeType = finfo_file($fileInfo, $path);
+                finfo_close($fileInfo);
+
+                if (is_string($mimeType) && $mimeType !== '') {
+                    $detectedTypes[] = strtolower($mimeType);
+                }
+            }
+        }
+
+        $imageInfo = @getimagesize($path);
+
+        if (is_array($imageInfo) && isset($imageInfo['mime']) && is_string($imageInfo['mime'])) {
+            $detectedTypes[] = strtolower($imageInfo['mime']);
+        }
+
+        $allowedTypes = self::EXTENSION_MIME_TYPES[$extension] ?? [];
+
+        foreach (array_unique($detectedTypes) as $detectedType) {
+            if (in_array($detectedType, $allowedTypes, true)) {
+                return;
+            }
+        }
+
+        if (in_array($extension, ['avif', 'heic'], true) && $this->hasIsoImageBrand($path, $extension)) {
+            return;
+        }
+
+        throw new RuntimeException(sprintf('Uploaded file is not a valid supported image: %s', $originalName));
+    }
+
+    private function hasIsoImageBrand(string $path, string $extension): bool
+    {
+        $handle = @fopen($path, 'rb');
+
+        if ($handle === false) {
+            return false;
+        }
+
+        $header = fread($handle, 64);
+        fclose($handle);
+
+        if ($header === false || !str_contains($header, 'ftyp')) {
+            return false;
+        }
+
+        if ($extension === 'avif') {
+            return str_contains($header, 'avif') || str_contains($header, 'avis');
+        }
+
+        return str_contains($header, 'heic') || str_contains($header, 'heix') || str_contains($header, 'hevc') || str_contains($header, 'hevx') || str_contains($header, 'mif1');
     }
 
     private function buildTemporaryDirectory(): string
@@ -274,10 +374,25 @@ final class PhotoUploadService
         stream_set_blocking($pipes[2], false);
 
         $output = [];
+        $outputLineCount = 0;
+        $outputByteCount = 0;
+        $hasTruncatedOutput = false;
+        $startedAt = microtime(true);
         $buffers = ['stdout' => '', 'stderr' => ''];
         $openPipes = ['stdout' => $pipes[1], 'stderr' => $pipes[2]];
 
-        while ($openPipes !== []) {
+        $timedOut = false;
+
+        do {
+            $status = proc_get_status($process);
+            $processRunning = $status['running'] ?? false;
+
+            if ($this->scriptTimeoutSeconds > 0 && microtime(true) - $startedAt > $this->scriptTimeoutSeconds) {
+                $timedOut = true;
+                proc_terminate($process);
+                break;
+            }
+
             foreach ($openPipes as $streamName => $pipe) {
                 $chunk = stream_get_contents($pipe);
 
@@ -285,16 +400,22 @@ final class PhotoUploadService
                     $buffers[$streamName] .= $chunk;
 
                     foreach ($this->extractCompleteOutputLines($buffers[$streamName]) as $line) {
-                        $output[] = $line;
-                        yield ['line' => $line, 'stream' => $streamName];
+                        $nextLine = $this->recordOutputLine($line, $output, $outputLineCount, $outputByteCount, $hasTruncatedOutput);
+
+                        if ($nextLine !== null) {
+                            yield ['line' => $nextLine, 'stream' => $streamName];
+                        }
                     }
                 }
 
                 if (feof($pipe)) {
                     if (trim($buffers[$streamName]) !== '') {
                         $line = rtrim($buffers[$streamName], "\r\n");
-                        $output[] = $line;
-                        yield ['line' => $line, 'stream' => $streamName];
+                        $nextLine = $this->recordOutputLine($line, $output, $outputLineCount, $outputByteCount, $hasTruncatedOutput);
+
+                        if ($nextLine !== null) {
+                            yield ['line' => $nextLine, 'stream' => $streamName];
+                        }
                     }
 
                     fclose($pipe);
@@ -302,12 +423,22 @@ final class PhotoUploadService
                 }
             }
 
-            if ($openPipes !== []) {
+            if ($openPipes !== [] || $processRunning) {
                 usleep(10000);
+            }
+        } while ($openPipes !== [] || $processRunning);
+
+        foreach ($openPipes as $pipe) {
+            if (is_resource($pipe)) {
+                fclose($pipe);
             }
         }
 
         $exitCode = proc_close($process);
+
+        if ($timedOut) {
+            throw new RuntimeException(sprintf('Remote upload timed out after %d seconds.', $this->scriptTimeoutSeconds));
+        }
 
         if ($exitCode === 127 || $exitCode === 9009) {
             throw new RuntimeException($output === [] ? 'Python interpreter is unavailable.' : "Python interpreter is unavailable:\n" . implode("\n", $output));
@@ -318,6 +449,31 @@ final class PhotoUploadService
         }
 
         return $output;
+    }
+
+    /**
+     * @param list<string> $output
+     */
+    private function recordOutputLine(string $line, array &$output, int &$lineCount, int &$byteCount, bool &$hasTruncatedOutput): ?string
+    {
+        if ($hasTruncatedOutput) {
+            return null;
+        }
+
+        $nextByteCount = $byteCount + strlen($line);
+
+        if ($lineCount >= $this->maxOutputLines || $nextByteCount > $this->maxOutputBytes) {
+            $hasTruncatedOutput = true;
+            $output[] = self::OUTPUT_TRUNCATION_LINE;
+
+            return self::OUTPUT_TRUNCATION_LINE;
+        }
+
+        $lineCount++;
+        $byteCount = $nextByteCount;
+        $output[] = $line;
+
+        return $line;
     }
 
     /**

@@ -19,6 +19,7 @@ use Psr\Http\Message\ResponseInterface as Response;
 use Psr\Http\Message\ServerRequestInterface as Request;
 use Slim\Factory\AppFactory;
 use Slim\Psr7\Factory\ResponseFactory;
+use Slim\Psr7\Stream;
 
 function createApp(
     string $photosDirectory,
@@ -35,6 +36,13 @@ function createApp(
     ?string $uploadPythonBinary = null,
     ?string $uploadScriptEnvFile = null,
     ?string $uploadTemporaryDirectory = null,
+    ?string $uploadAccessToken = null,
+    int $uploadMaxFiles = 20,
+    int $uploadMaxFileBytes = 52428800,
+    int $uploadMaxTotalBytes = 314572800,
+    int $uploadScriptTimeoutSeconds = 600,
+    int $uploadScriptMaxOutputLines = 500,
+    int $uploadScriptMaxOutputBytes = 262144,
 ): \Slim\App {
     $app = AppFactory::create();
     $photoCache = $cache ?? new NullPhotoCache();
@@ -118,25 +126,51 @@ function createApp(
             $uploadPythonBinary,
             $uploadScriptEnvFile,
             $uploadTemporaryDirectory,
+            $uploadMaxFiles,
+            $uploadMaxFileBytes,
+            $uploadMaxTotalBytes,
+            $uploadScriptTimeoutSeconds,
+            $uploadScriptMaxOutputLines,
+            $uploadScriptMaxOutputBytes,
         ),
         $photoCache,
+        $uploadAccessToken,
     ));
 
     $app->get('/media/{path:.*}', static function (Request $request, Response $response, array $args) use ($photosDirectory): Response {
         $relativePath = trim((string) ($args['path'] ?? ''), '/');
 
-        if ($relativePath === '' || str_contains($relativePath, '..')) {
+        if ($relativePath === '' || str_contains($relativePath, "\0")) {
             return $response->withStatus(404);
         }
 
-        $path = rtrim($photosDirectory, '/\\') . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $relativePath);
+        $photosRoot = realpath($photosDirectory);
 
-        if (!is_file($path) || !is_readable($path)) {
+        if ($photosRoot === false) {
             return $response->withStatus(404);
         }
 
-        $modifiedAt = @filemtime($path);
-        $size = @filesize($path);
+        $path = rtrim($photosRoot, '/\\') . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $relativePath);
+        $realPath = realpath($path);
+
+        if ($realPath === false || !is_file($realPath) || !is_readable($realPath)) {
+            return $response->withStatus(404);
+        }
+
+        $normalizedRoot = str_replace('\\', '/', rtrim($photosRoot, '/\\')) . '/';
+        $normalizedPath = str_replace('\\', '/', $realPath);
+
+        if (PHP_OS_FAMILY === 'Windows') {
+            $normalizedRoot = strtolower($normalizedRoot);
+            $normalizedPath = strtolower($normalizedPath);
+        }
+
+        if (!str_starts_with($normalizedPath, $normalizedRoot)) {
+            return $response->withStatus(404);
+        }
+
+        $modifiedAt = @filemtime($realPath);
+        $size = @filesize($realPath);
 
         if ($modifiedAt === false || $size === false) {
             return $response->withStatus(404);
@@ -147,7 +181,8 @@ function createApp(
         $response = $response
             ->withHeader('Cache-Control', 'public, max-age=315360000, immutable')
             ->withHeader('ETag', $etag)
-            ->withHeader('Last-Modified', $lastModified);
+            ->withHeader('Last-Modified', $lastModified)
+            ->withHeader('X-Content-Type-Options', 'nosniff');
 
         if ($request->getHeaderLine('If-None-Match') === $etag) {
             return $response->withStatus(304);
@@ -160,8 +195,8 @@ function createApp(
             return $response->withStatus(304);
         }
 
-        $mimeType = function_exists('mime_content_type') ? (mime_content_type($path) ?: '') : '';
-        $extension = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+        $mimeType = function_exists('mime_content_type') ? (mime_content_type($realPath) ?: '') : '';
+        $extension = strtolower(pathinfo($realPath, PATHINFO_EXTENSION));
 
         if ($extension === 'avif' && !str_starts_with($mimeType, 'image/')) {
             $mimeType = 'image/avif';
@@ -180,25 +215,23 @@ function createApp(
         if ($mimeType === '') {
             $mimeType = 'application/octet-stream';
         }
-        $stream = fopen($path, 'rb');
+
+        $stream = fopen($realPath, 'rb');
 
         if ($stream === false) {
             return $response->withStatus(404);
         }
 
-        $body = $response->getBody();
-        while (!feof($stream)) {
-            $chunk = fread($stream, 8192);
-            if ($chunk === false) {
-                break;
-            }
-            $body->write($chunk);
-        }
-        fclose($stream);
-
-        return $response
+        $response = $response
+            ->withBody(new Stream($stream))
             ->withHeader('Content-Type', $mimeType)
             ->withHeader('Content-Length', (string) $size);
+
+        if ($extension === 'svg') {
+            $response = $response->withHeader('Content-Security-Policy', "default-src 'none'; script-src 'none'; sandbox");
+        }
+
+        return $response;
     });
 
     return $app;

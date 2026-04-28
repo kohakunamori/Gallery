@@ -182,6 +182,44 @@ final class GetPhotosActionTest extends TestCase
         self::assertSame($contents, (string) $response->getBody());
     }
 
+    public function testMediaRouteRejectsTraversalPaths(): void
+    {
+        $directory = sys_get_temp_dir() . '/gallery-media-' . bin2hex(random_bytes(4));
+        mkdir($directory, 0777, true);
+        file_put_contents($directory . '/pixel.png', 'not used');
+
+        $app = createApp($directory, 'https://img.example.com', null, true, '/media');
+        $response = $app->handle((new ServerRequestFactory())->createServerRequest('GET', '/media/../pixel.png'));
+
+        self::assertSame(404, $response->getStatusCode());
+
+        unlink($directory . '/pixel.png');
+        rmdir($directory);
+    }
+
+    public function testMediaRouteRejectsSymlinkEscapes(): void
+    {
+        $directory = sys_get_temp_dir() . '/gallery-media-' . bin2hex(random_bytes(4));
+        $outsideDirectory = sys_get_temp_dir() . '/gallery-media-outside-' . bin2hex(random_bytes(4));
+        mkdir($directory, 0777, true);
+        mkdir($outsideDirectory, 0777, true);
+        file_put_contents($outsideDirectory . '/secret.png', 'secret');
+
+        if (!@symlink($outsideDirectory . '/secret.png', $directory . '/escape.png')) {
+            $this->markTestSkipped('Symlinks are unavailable on this filesystem.');
+        }
+
+        $app = createApp($directory, 'https://img.example.com', null, true, '/media');
+        $response = $app->handle((new ServerRequestFactory())->createServerRequest('GET', '/media/escape.png'));
+
+        self::assertSame(404, $response->getStatusCode());
+
+        unlink($directory . '/escape.png');
+        unlink($outsideDirectory . '/secret.png');
+        rmdir($directory);
+        rmdir($outsideDirectory);
+    }
+
     public function testReturnsMediaSourceStatusesIncludingDisabledUnconfiguredQiniu(): void
     {
         $photosDir = dirname(__DIR__, 3) . '/storage/photos';
