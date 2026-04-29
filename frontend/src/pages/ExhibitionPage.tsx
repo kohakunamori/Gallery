@@ -2,6 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ExhibitionHeader } from '../components/exhibition/ExhibitionHeader';
 import { ExhibitionHero } from '../components/exhibition/ExhibitionHero';
 import { ExhibitionSection } from '../components/exhibition/ExhibitionSection';
+import {
+  getInitialVisibleCount,
+  getLoadMoreCount,
+  getLoadTriggerRootMargin,
+  resolveColumnCount,
+} from '../components/exhibition/WaterfallGallery';
 import { GallerySettingsModal } from '../components/exhibition/GallerySettingsModal';
 import {
   normalizeGalleryMediaSourcePreference,
@@ -24,8 +30,7 @@ import { readSelectedPhotoId, writeSelectedPhotoId } from '../utils/photoQuery';
 import { groupPhotosByMonth } from '../utils/groupPhotosByMonth';
 import { sortPhotos } from '../utils/sortPhotos';
 
-const INITIAL_VISIBLE_COUNT = 24;
-const LOAD_MORE_COUNT = 24;
+const DEFAULT_VIEWPORT_WIDTH = 1280;
 const TOP_VISIBILITY_THRESHOLD = 24;
 const DOWNWARD_HIDE_THRESHOLD = 64;
 const UPWARD_REVEAL_THRESHOLD = 96;
@@ -44,6 +49,18 @@ function getAutoMediaSourceStatusSignature(mediaSourceStatuses: MediaSourceStatu
     const status = getMediaSourceStatus(mediaSourceStatuses, mediaSource);
     return `${mediaSource}:${status?.isAvailable ?? false}:${status?.isDisabled ?? false}:${status?.status ?? 'unknown'}`;
   }).join('|');
+}
+
+function getViewportWidth() {
+  return typeof window === 'undefined' ? DEFAULT_VIEWPORT_WIDTH : window.innerWidth;
+}
+
+function getResolvedColumnCountForPreference(columnPreference: GalleryColumnPreference) {
+  return resolveColumnCount(getViewportWidth(), columnPreference);
+}
+
+function getInitialVisiblePhotoCount(columnPreference: GalleryColumnPreference) {
+  return getInitialVisibleCount(getResolvedColumnCountForPreference(columnPreference));
 }
 
 function isAbortError(error: unknown): error is DOMException {
@@ -123,11 +140,11 @@ async function resolveAutoMediaSourcePhotos(
 }
 
 export function ExhibitionPage() {
+  const [persistedSettings] = useState(readGallerySettings);
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [status, setStatus] = useState<'loading' | 'ready' | 'empty' | 'error'>('loading');
-  const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_COUNT);
+  const [visibleCount, setVisibleCount] = useState(() => getInitialVisiblePhotoCount(persistedSettings.columnPreference));
   const [selectedPhotoId, setSelectedPhotoId] = useState<string | null>(() => readSelectedPhotoId());
-  const persistedSettings = readGallerySettings();
   const [isAtTop, setIsAtTop] = useState(true);
   const [isHeaderVisible, setIsHeaderVisible] = useState(true);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -240,7 +257,7 @@ export function ExhibitionPage() {
     const controller = new AbortController();
 
     setStatus('loading');
-    setVisibleCount(INITIAL_VISIBLE_COUNT);
+    setVisibleCount(getInitialVisiblePhotoCount(columnPreference));
 
     const loadPhotos = async () => {
       try {
@@ -293,8 +310,8 @@ export function ExhibitionPage() {
   }, [columnPreference, sortPreference, mediaSourcePreference]);
 
   const sortedPhotos = useMemo(() => sortPhotos(photos, sortPreference), [photos, sortPreference]);
+  const allGroups = useMemo(() => groupPhotosByMonth(sortedPhotos), [sortedPhotos]);
   const groups = useMemo(() => {
-    const allGroups = groupPhotosByMonth(sortedPhotos);
     let remainingVisibleCount = visibleCount;
 
     return allGroups.flatMap((group) => {
@@ -302,13 +319,27 @@ export function ExhibitionPage() {
         return [];
       }
 
+      if (group.photos.length <= remainingVisibleCount) {
+        remainingVisibleCount -= group.photos.length;
+        return [group];
+      }
+
       const visiblePhotos = group.photos.slice(0, remainingVisibleCount);
-      remainingVisibleCount -= visiblePhotos.length;
+      remainingVisibleCount = 0;
 
       return visiblePhotos.length === 0 ? [] : [{ ...group, photos: visiblePhotos }];
     });
-  }, [sortedPhotos, visibleCount]);
-  const selectedIndex = sortedPhotos.findIndex((photo) => photo.id === selectedPhotoId);
+  }, [allGroups, visibleCount]);
+  const selectedIndex = useMemo(
+    () => sortedPhotos.findIndex((photo) => photo.id === selectedPhotoId),
+    [selectedPhotoId, sortedPhotos],
+  );
+  const resolvedColumnCount = useMemo(
+    () => getResolvedColumnCountForPreference(columnPreference),
+    [columnPreference],
+  );
+  const loadMoreCount = getLoadMoreCount(resolvedColumnCount);
+  const loadTriggerRootMargin = getLoadTriggerRootMargin(resolvedColumnCount);
 
   const hasMorePhotos = visibleCount < sortedPhotos.length;
 
@@ -316,28 +347,28 @@ export function ExhibitionPage() {
     if (!hasMorePhotos) {
       return;
     }
-    setVisibleCount((current) => Math.min(current + LOAD_MORE_COUNT, sortedPhotos.length));
-  }, [hasMorePhotos, sortedPhotos.length]);
+    setVisibleCount((current) => Math.min(current + loadMoreCount, sortedPhotos.length));
+  }, [hasMorePhotos, loadMoreCount, sortedPhotos.length]);
 
-  const openPhoto = (photoId: string) => {
+  const openPhoto = useCallback((photoId: string) => {
     setSelectedPhotoId(photoId);
     writeSelectedPhotoId(photoId);
-  };
+  }, []);
 
-  const closeViewer = () => {
+  const closeViewer = useCallback(() => {
     setSelectedPhotoId(null);
     writeSelectedPhotoId(null);
-  };
+  }, []);
 
-  const openSettings = () => {
+  const openSettings = useCallback(() => {
     setIsSettingsOpen(true);
-  };
+  }, []);
 
-  const closeSettings = () => {
+  const closeSettings = useCallback(() => {
     setIsSettingsOpen(false);
-  };
+  }, []);
 
-  const selectPhotoAtIndex = (index: number) => {
+  const selectPhotoAtIndex = useCallback((index: number) => {
     const nextPhoto = sortedPhotos[index];
 
     if (!nextPhoto) {
@@ -346,7 +377,7 @@ export function ExhibitionPage() {
 
     setSelectedPhotoId(nextPhoto.id);
     writeSelectedPhotoId(nextPhoto.id);
-  };
+  }, [sortedPhotos]);
 
   return (
     <>
@@ -369,7 +400,13 @@ export function ExhibitionPage() {
                   onOpen={openPhoto}
                 />
               ))}
-              <LoadTrigger disabled={false} isComplete={!hasMorePhotos} onLoadMore={loadMore} resetKey={visibleCount} />
+              <LoadTrigger
+                disabled={false}
+                isComplete={!hasMorePhotos}
+                onLoadMore={loadMore}
+                resetKey={visibleCount}
+                rootMargin={loadTriggerRootMargin}
+              />
             </div>
           )}
         </section>

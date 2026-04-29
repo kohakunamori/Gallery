@@ -201,7 +201,7 @@ describe('PhotoViewerModal', () => {
     expect(onSelectIndex).not.toHaveBeenCalled();
   });
 
-  it('preloads the adjacent original image when the modal opens', () => {
+  it('preloads the adjacent original image after the current modal image loads', () => {
     const preloadSpy = vi.spyOn(WaterfallCardModule, 'preloadPhotoImage').mockImplementation(() => {});
 
     render(
@@ -212,6 +212,10 @@ describe('PhotoViewerModal', () => {
         onClose={vi.fn()}
       />,
     );
+
+    expect(preloadSpy).not.toHaveBeenCalled();
+
+    fireEvent.load(screen.getByRole('img', { name: 'one.jpg' }));
 
     expect(preloadSpy).toHaveBeenCalledWith('two', '/media/two.jpg');
   });
@@ -241,6 +245,10 @@ describe('PhotoViewerModal', () => {
       />,
     );
 
+    expect(preloadSpy).not.toHaveBeenCalled();
+
+    fireEvent.load(screen.getByRole('img', { name: 'two.jpg' }));
+
     expect(preloadSpy).toHaveBeenCalledWith('one', '/media/one.jpg');
     expect(preloadSpy).toHaveBeenCalledWith('three', '/media/three.jpg');
 
@@ -254,6 +262,10 @@ describe('PhotoViewerModal', () => {
         onClose={vi.fn()}
       />,
     );
+
+    expect(preloadSpy).not.toHaveBeenCalled();
+
+    fireEvent.load(screen.getByRole('img', { name: 'three.jpg' }));
 
     expect(preloadSpy).toHaveBeenCalledWith('two', '/media/two.jpg');
   });

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fetchPhotos } from './photos';
+import { fetchPhotos, resetPhotoRequestCache } from './photos';
 
 const samplePhoto = {
   id: 'photo-1',
@@ -14,6 +14,7 @@ const samplePhoto = {
 
 describe('fetchPhotos', () => {
   afterEach(() => {
+    resetPhotoRequestCache();
     vi.unstubAllGlobals();
   });
 
@@ -22,12 +23,11 @@ describe('fetchPhotos', () => {
       ok: true,
       json: async () => ({ items: [samplePhoto] }),
     });
-    const controller = new AbortController();
 
     vi.stubGlobal('fetch', fetchMock);
 
-    await expect(fetchPhotos('r2', controller.signal)).resolves.toEqual([samplePhoto]);
-    expect(fetchMock).toHaveBeenCalledWith('/api/photos?mediaSource=r2', { signal: controller.signal });
+    await expect(fetchPhotos('r2')).resolves.toEqual([samplePhoto]);
+    expect(fetchMock).toHaveBeenCalledWith(new URL('/api/photos?mediaSource=r2', window.location.origin).toString(), { signal: expect.any(AbortSignal) });
   });
 
   it('throws on non-ok responses', async () => {
@@ -42,7 +42,7 @@ describe('fetchPhotos', () => {
     await expect(fetchPhotos('local')).rejects.toThrow('Request failed with status 500');
   });
 
-  it('passes through an omitted abort signal', async () => {
+  it('uses an internal abort signal when the caller does not provide one', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({ items: [samplePhoto] }),
@@ -52,6 +52,35 @@ describe('fetchPhotos', () => {
 
     await fetchPhotos('r2');
 
-    expect(fetchMock).toHaveBeenCalledWith('/api/photos?mediaSource=r2', { signal: undefined });
+    expect(fetchMock).toHaveBeenCalledWith(new URL('/api/photos?mediaSource=r2', window.location.origin).toString(), { signal: expect.any(AbortSignal) });
+  });
+
+  it('deduplicates concurrent requests for the same media source', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [samplePhoto] }),
+    });
+
+    vi.stubGlobal('fetch', fetchMock);
+
+    const [firstResult, secondResult] = await Promise.all([fetchPhotos('r2'), fetchPhotos('r2')]);
+
+    expect(firstResult).toEqual([samplePhoto]);
+    expect(secondResult).toEqual([samplePhoto]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('reuses a fulfilled response for the same media source', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ items: [samplePhoto] }),
+    });
+
+    vi.stubGlobal('fetch', fetchMock);
+
+    await fetchPhotos('r2');
+    await fetchPhotos('r2');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

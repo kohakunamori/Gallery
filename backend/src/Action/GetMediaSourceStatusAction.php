@@ -17,10 +17,23 @@ final class GetMediaSourceStatusAction
 
     public function __invoke(Request $request, Response $response): Response
     {
-        $response->getBody()->write(
-            json_encode(['items' => $this->mediaSourceAvailabilityService->getAllSourceStatuses()], JSON_THROW_ON_ERROR),
-        );
+        $payload = json_encode(['items' => $this->mediaSourceAvailabilityService->getAllSourceStatuses()], JSON_THROW_ON_ERROR);
+        $etag = '"' . sha1($payload) . '"';
+        $requestEtags = array_map('trim', explode(',', $request->getHeaderLine('If-None-Match')));
 
-        return $response->withHeader('Content-Type', 'application/json');
+        if (in_array($etag, $requestEtags, true)) {
+            return $response
+                ->withStatus(304)
+                ->withHeader('Content-Type', 'application/json')
+                ->withHeader('Cache-Control', 'public, max-age=15, stale-while-revalidate=60')
+                ->withHeader('ETag', $etag);
+        }
+
+        $response->getBody()->write($payload);
+
+        return $response
+            ->withHeader('Content-Type', 'application/json')
+            ->withHeader('Cache-Control', 'public, max-age=15, stale-while-revalidate=60')
+            ->withHeader('ETag', $etag);
     }
 }

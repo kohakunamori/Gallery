@@ -28,6 +28,7 @@ class MockIntersectionObserver {
 
   callback: IntersectionObserverCallback;
   options?: IntersectionObserverInit;
+  observedElements = new Set<Element>();
 
   constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
     this.callback = callback;
@@ -35,16 +36,30 @@ class MockIntersectionObserver {
     MockIntersectionObserver.instances.push(this);
   }
 
-  observe() {}
-  disconnect() {}
-  unobserve() {}
+  observe(target: Element) {
+    this.observedElements.add(target);
+  }
 
-  trigger(isIntersecting = true) {
+  disconnect() {
+    this.observedElements.clear();
+  }
+
+  unobserve(target: Element) {
+    this.observedElements.delete(target);
+  }
+
+  trigger(target?: Element, isIntersecting = true) {
+    const resolvedTarget = target ?? this.observedElements.values().next().value ?? document.createElement('div');
+
     this.callback(
-      [{ isIntersecting } as IntersectionObserverEntry],
+      [{ isIntersecting, target: resolvedTarget } as unknown as IntersectionObserverEntry],
       this as unknown as IntersectionObserver,
     );
   }
+}
+
+function getObserverForElement(element: Element) {
+  return MockIntersectionObserver.instances.find((instance) => instance.observedElements.has(element));
 }
 
 class MockImage {
@@ -135,6 +150,11 @@ describe('ExhibitionPage', () => {
     GALLERY_MEDIA_SOURCE_VISIBILITY.r2 = true;
     GALLERY_MEDIA_SOURCE_VISIBILITY.qiniu = true;
     GALLERY_MEDIA_SOURCE_VISIBILITY.local = true;
+    Object.defineProperty(window, 'innerWidth', {
+      writable: true,
+      configurable: true,
+      value: 1280,
+    });
     Object.defineProperty(window, 'scrollY', {
       writable: true,
       configurable: true,
@@ -412,7 +432,7 @@ describe('ExhibitionPage', () => {
 
     act(() => {
       for (const instance of MockIntersectionObserver.instances) {
-        instance.trigger(true);
+        instance.trigger();
       }
     });
 
@@ -496,6 +516,12 @@ describe('ExhibitionPage', () => {
   });
 
   it('falls back from persisted qiniu to r2 when qiniu is disabled', async () => {
+    const qiniuUsage = mediaSourceStatuses[1].usage;
+
+    if (qiniuUsage === undefined) {
+      throw new Error('Expected qiniu usage fixture to be defined.');
+    }
+
     mockedFetchMediaSourceStatuses.mockResolvedValue([
       mediaSourceStatuses[0],
       {
@@ -505,7 +531,7 @@ describe('ExhibitionPage', () => {
         status: 'over-quota',
         message: 'Qiniu monthly traffic quota has been reached.',
         usage: {
-          ...mediaSourceStatuses[1].usage!,
+          ...qiniuUsage,
           usedBytes: 11 * 1024 ** 3,
           quotaBytes: 10 * 1024 ** 3,
           remainingBytes: 0,
@@ -720,11 +746,15 @@ describe('ExhibitionPage', () => {
 
     await screen.findByRole('button', { name: 'Open photo-0.jpg' });
 
-    expect(screen.queryByRole('button', { name: 'Open photo-24.jpg' })).not.toBeInTheDocument();
-    expect(MockIntersectionObserver.instances.at(-1)?.options?.rootMargin).toBe('1200px 0px');
+    expect(screen.queryByRole('button', { name: 'Open photo-16.jpg' })).not.toBeInTheDocument();
+
+    const loadTrigger = screen.getByText('Continue scrolling');
+    const loadTriggerObserver = getObserverForElement(loadTrigger);
+
+    expect(loadTriggerObserver?.options?.rootMargin).toBe('800px 0px');
 
     act(() => {
-      MockIntersectionObserver.instances.at(-1)?.trigger(true);
+      loadTriggerObserver?.trigger(loadTrigger, true);
     });
 
     expect(await screen.findByRole('button', { name: 'Open photo-29.jpg' })).toBeInTheDocument();
@@ -748,11 +778,14 @@ describe('ExhibitionPage', () => {
 
     await screen.findByRole('button', { name: 'Open photo-0.jpg' });
 
-    expect(screen.queryByRole('button', { name: 'Open photo-24.jpg' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Open photo-16.jpg' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Open photo-39.jpg' })).not.toBeInTheDocument();
 
+    const loadTrigger = screen.getByText('Continue scrolling');
+    const loadTriggerObserver = getObserverForElement(loadTrigger);
+
     act(() => {
-      MockIntersectionObserver.instances.at(-1)?.trigger(true);
+      loadTriggerObserver?.trigger(loadTrigger, true);
     });
 
     expect(await screen.findByRole('button', { name: 'Open photo-39.jpg' })).toBeInTheDocument();

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { GalleryColumnPreference } from '../../utils/gallerySettings';
 import { clampGalleryColumnCount } from '../../utils/gallerySettings';
 import type { Photo } from '../../types/photo';
@@ -10,20 +10,15 @@ type WaterfallGalleryProps = {
   onOpen: (photoId: string) => void;
 };
 
+const AUTO_COLUMN_TARGET_WIDTH = 360;
+const MAX_AUTO_COLUMN_COUNT = 6;
+
 export function getAutoColumnCount(viewportWidth: number) {
-  if (viewportWidth >= 1536) {
-    return 4;
-  }
+  const safeViewportWidth = Math.max(viewportWidth, AUTO_COLUMN_TARGET_WIDTH);
 
-  if (viewportWidth >= 1024) {
-    return 3;
-  }
-
-  if (viewportWidth >= 640) {
-    return 2;
-  }
-
-  return 1;
+  return clampGalleryColumnCount(
+    Math.min(MAX_AUTO_COLUMN_COUNT, Math.max(1, Math.round(safeViewportWidth / AUTO_COLUMN_TARGET_WIDTH))),
+  );
 }
 
 export function resolveColumnCount(viewportWidth: number, columnPreference: GalleryColumnPreference) {
@@ -58,7 +53,116 @@ export function distributePhotosIntoColumns(photos: Photo[], columnCount: number
 }
 
 export function getPreloadWindowSize(columnCount: number) {
+  if (columnCount >= 7) {
+    return 2;
+  }
+
+  if (columnCount >= 5) {
+    return 4;
+  }
+
   return columnCount <= 2 ? 4 : 6;
+}
+
+export function getImageRootMargin(columnCount: number) {
+  if (columnCount >= 5) {
+    return '800px 0px';
+  }
+
+  if (columnCount >= 3) {
+    return '1000px 0px';
+  }
+
+  return '1200px 0px';
+}
+
+export function getImageReleaseRootMargin(columnCount: number) {
+  if (columnCount >= 5) {
+    return '2200px 0px';
+  }
+
+  if (columnCount >= 3) {
+    return '2600px 0px';
+  }
+
+  return '3000px 0px';
+}
+
+export function getLoadTriggerRootMargin(columnCount: number) {
+  if (columnCount >= 5) {
+    return '600px 0px';
+  }
+
+  if (columnCount >= 3) {
+    return '800px 0px';
+  }
+
+  return '1000px 0px';
+}
+
+export function getInitialVisibleCount(columnCount: number) {
+  if (columnCount <= 2) {
+    return columnCount * 5;
+  }
+
+  return Math.min(24, columnCount * 4);
+}
+
+export function getLoadMoreCount(columnCount: number) {
+  if (columnCount <= 2) {
+    return columnCount * 4;
+  }
+
+  return Math.min(24, columnCount * 3);
+}
+
+export function shouldReleaseOffscreenImages(columnCount: number) {
+  return columnCount >= 2;
+}
+
+export function getPriorityPhotoCount(columnCount: number) {
+  if (columnCount <= 1) {
+    return 1;
+  }
+
+  if (columnCount === 2) {
+    return 2;
+  }
+
+  return 3;
+}
+
+export function getPriorityPhotoIds(columns: Photo[][], limit: number) {
+  if (limit <= 0) {
+    return [];
+  }
+
+  const priorityPhotoIds: string[] = [];
+
+  for (let rowIndex = 0; priorityPhotoIds.length < limit; rowIndex += 1) {
+    let hasPhotoInRow = false;
+
+    for (const column of columns) {
+      const photo = column[rowIndex];
+
+      if (photo === undefined) {
+        continue;
+      }
+
+      hasPhotoInRow = true;
+      priorityPhotoIds.push(photo.id);
+
+      if (priorityPhotoIds.length === limit) {
+        break;
+      }
+    }
+
+    if (!hasPhotoInRow) {
+      break;
+    }
+  }
+
+  return priorityPhotoIds;
 }
 
 export function getPreloadPhotoIds(columns: Photo[][], seenPhotoIds: Set<string>, limit: number) {
@@ -91,69 +195,112 @@ export function getPreloadPhotoIds(columns: Photo[][], seenPhotoIds: Set<string>
   return Array.from(new Set(preloadPhotoIds)).slice(0, limit);
 }
 
-export function WaterfallGallery({ photos, columnPreference, onOpen }: WaterfallGalleryProps) {
-  const [viewportWidth, setViewportWidth] = useState(() =>
-    typeof window === 'undefined' ? 1280 : window.innerWidth,
-  );
-  const [seenPhotoIds, setSeenPhotoIds] = useState<Set<string>>(() => new Set());
+function getInitialAutoColumnCount() {
+  return typeof window === 'undefined' ? getAutoColumnCount(1280) : getAutoColumnCount(window.innerWidth);
+}
+
+function arePhotoIdSetsEqual(left: Set<string>, right: Set<string>) {
+  if (left.size !== right.size) {
+    return false;
+  }
+
+  for (const photoId of left) {
+    if (!right.has(photoId)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+export const WaterfallGallery = memo(function WaterfallGallery({ photos, columnPreference, onOpen }: WaterfallGalleryProps) {
+  const [autoColumnCount, setAutoColumnCount] = useState(getInitialAutoColumnCount);
+  const [preloadPhotoIds, setPreloadPhotoIds] = useState<Set<string>>(() => new Set());
+  const seenPhotoIdsRef = useRef<Set<string>>(new Set());
+  const syncPreloadPhotoIdsRef = useRef<(() => void) | null>(null);
+  const scheduledSyncFrameRef = useRef<number | null>(null);
 
   useEffect(() => {
+    if (columnPreference !== 'auto') {
+      return;
+    }
+
     const handleResize = () => {
-      setViewportWidth(window.innerWidth);
+      const nextColumnCount = getAutoColumnCount(window.innerWidth);
+
+      setAutoColumnCount((currentColumnCount) => (currentColumnCount === nextColumnCount ? currentColumnCount : nextColumnCount));
     };
 
+    handleResize();
     window.addEventListener('resize', handleResize);
 
     return () => {
       window.removeEventListener('resize', handleResize);
     };
-  }, []);
-
-  const resolvedColumnCount = useMemo(
-    () => resolveColumnCount(viewportWidth, columnPreference),
-    [columnPreference, viewportWidth],
-  );
-
-  const columns = useMemo(
-    () => distributePhotosIntoColumns(photos, resolvedColumnCount),
-    [photos, resolvedColumnCount],
-  );
+  }, [columnPreference]);
 
   useEffect(() => {
-    const currentPhotoIds = new Set(photos.map((photo) => photo.id));
-
-    setSeenPhotoIds((current) => {
-      let changed = false;
-      const next = new Set<string>();
-
-      for (const photoId of current) {
-        if (currentPhotoIds.has(photoId)) {
-          next.add(photoId);
-        } else {
-          changed = true;
-        }
+    return () => {
+      if (scheduledSyncFrameRef.current !== null) {
+        window.cancelAnimationFrame(scheduledSyncFrameRef.current);
       }
+    };
+  }, []);
 
-      return changed ? next : current;
-    });
-  }, [photos]);
+  const resolvedColumnCount = columnPreference === 'auto' ? autoColumnCount : clampGalleryColumnCount(columnPreference);
+  const columns = useMemo(() => distributePhotosIntoColumns(photos, resolvedColumnCount), [photos, resolvedColumnCount]);
+  const priorityPhotoIds = useMemo(
+    () => new Set(getPriorityPhotoIds(columns, getPriorityPhotoCount(resolvedColumnCount))),
+    [columns, resolvedColumnCount],
+  );
 
-  const handlePhotoEnterViewport = useCallback((photoId: string) => {
-    setSeenPhotoIds((current) => {
-      if (current.has(photoId)) {
-        return current;
+  const syncPreloadPhotoIds = useCallback(() => {
+    const nextSeenPhotoIds = new Set<string>();
+
+    for (const photo of photos) {
+      if (seenPhotoIdsRef.current.has(photo.id)) {
+        nextSeenPhotoIds.add(photo.id);
       }
+    }
 
-      const next = new Set(current);
-      next.add(photoId);
-      return next;
+    seenPhotoIdsRef.current = nextSeenPhotoIds;
+
+    const nextPreloadPhotoIds = new Set(
+      getPreloadPhotoIds(columns, seenPhotoIdsRef.current, getPreloadWindowSize(resolvedColumnCount)),
+    );
+
+    setPreloadPhotoIds((currentPreloadPhotoIds) =>
+      arePhotoIdSetsEqual(currentPreloadPhotoIds, nextPreloadPhotoIds) ? currentPreloadPhotoIds : nextPreloadPhotoIds,
+    );
+  }, [columns, photos, resolvedColumnCount]);
+
+  useEffect(() => {
+    syncPreloadPhotoIdsRef.current = syncPreloadPhotoIds;
+  }, [syncPreloadPhotoIds]);
+
+  useEffect(() => {
+    syncPreloadPhotoIds();
+  }, [syncPreloadPhotoIds]);
+
+  const schedulePreloadPhotoIdsSync = useCallback(() => {
+    if (scheduledSyncFrameRef.current !== null) {
+      return;
+    }
+
+    scheduledSyncFrameRef.current = window.requestAnimationFrame(() => {
+      scheduledSyncFrameRef.current = null;
+      syncPreloadPhotoIdsRef.current?.();
     });
   }, []);
 
-  const preloadPhotoIds = useMemo(
-    () => new Set(getPreloadPhotoIds(columns, seenPhotoIds, getPreloadWindowSize(resolvedColumnCount))),
-    [columns, resolvedColumnCount, seenPhotoIds],
-  );
+  const handlePhotoEnterViewport = useCallback((photoId: string) => {
+    if (seenPhotoIdsRef.current.has(photoId)) {
+      return;
+    }
+
+    seenPhotoIdsRef.current.add(photoId);
+    schedulePreloadPhotoIdsSync();
+  }, [schedulePreloadPhotoIdsSync]);
 
   return (
     <div
@@ -170,11 +317,15 @@ export function WaterfallGallery({ photos, columnPreference, onOpen }: Waterfall
               photo={photo}
               onOpen={onOpen}
               shouldPreload={preloadPhotoIds.has(photo.id)}
+              isPriority={priorityPhotoIds.has(photo.id)}
               onEnterViewport={handlePhotoEnterViewport}
+              rootMargin={getImageRootMargin(resolvedColumnCount)}
+              releaseRootMargin={getImageReleaseRootMargin(resolvedColumnCount)}
+              releaseImageOnExit={shouldReleaseOffscreenImages(resolvedColumnCount)}
             />
           ))}
         </div>
       ))}
     </div>
   );
-}
+});

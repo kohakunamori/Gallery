@@ -17,16 +17,18 @@ class MockIntersectionObserver {
   unobserve() {}
 
   trigger(isIntersecting: boolean) {
-    this.callback([{ isIntersecting } as IntersectionObserverEntry], this as unknown as IntersectionObserver);
+    this.callback([{ isIntersecting } as unknown as IntersectionObserverEntry], this as unknown as IntersectionObserver);
   }
 }
 
 beforeEach(() => {
   MockIntersectionObserver.instances = [];
+  vi.useFakeTimers();
   vi.stubGlobal('IntersectionObserver', MockIntersectionObserver);
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -49,7 +51,7 @@ describe('LoadTrigger', () => {
     expect(secondLoadMore).not.toHaveBeenCalled();
   });
 
-  it('re-arms loading when resetKey changes while still intersecting', () => {
+  it('re-arms loading with a short delay when resetKey changes while still intersecting', () => {
     const loadMore = vi.fn();
     const { rerender } = render(
       <LoadTrigger disabled={false} isComplete={false} onLoadMore={loadMore} resetKey={0} />,
@@ -62,6 +64,12 @@ describe('LoadTrigger', () => {
     expect(loadMore).toHaveBeenCalledTimes(1);
 
     rerender(<LoadTrigger disabled={false} isComplete={false} onLoadMore={loadMore} resetKey={1} />);
+
+    expect(loadMore).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      vi.advanceTimersByTime(250);
+    });
 
     expect(loadMore).toHaveBeenCalledTimes(2);
   });

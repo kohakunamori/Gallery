@@ -19,6 +19,9 @@ final class GetPhotosActionTest extends TestCase
         $response = $app->handle($request);
 
         self::assertSame(200, $response->getStatusCode());
+        self::assertSame('application/json', $response->getHeaderLine('Content-Type'));
+        self::assertSame('public, max-age=15, stale-while-revalidate=60', $response->getHeaderLine('Cache-Control'));
+        self::assertNotSame('', $response->getHeaderLine('ETag'));
         self::assertSame(
             ['items' => []],
             json_decode((string) $response->getBody(), true, 512, JSON_THROW_ON_ERROR),
@@ -231,6 +234,8 @@ final class GetPhotosActionTest extends TestCase
 
         self::assertSame(200, $response->getStatusCode());
         self::assertSame('application/json', $response->getHeaderLine('Content-Type'));
+        self::assertSame('public, max-age=15, stale-while-revalidate=60', $response->getHeaderLine('Cache-Control'));
+        self::assertNotSame('', $response->getHeaderLine('ETag'));
         self::assertSame('r2', $payload['items'][0]['source']);
         self::assertSame('qiniu', $payload['items'][1]['source']);
         self::assertFalse($payload['items'][1]['isAvailable']);
@@ -238,6 +243,44 @@ final class GetPhotosActionTest extends TestCase
         self::assertSame('unconfigured', $payload['items'][1]['status']);
         self::assertSame('Qiniu media source is not configured.', $payload['items'][1]['message']);
         self::assertSame('local', $payload['items'][2]['source']);
+    }
+
+    public function testPhotosApiReturnsNotModifiedWhenTheEtagMatches(): void
+    {
+        $photosDir = dirname(__DIR__, 3) . '/storage/photos';
+        $app = createApp($photosDir, 'https://img.example.com', null, true, '/media');
+
+        $initialResponse = $app->handle((new ServerRequestFactory())->createServerRequest('GET', '/api/photos'));
+        $etag = $initialResponse->getHeaderLine('ETag');
+
+        $request = (new ServerRequestFactory())
+            ->createServerRequest('GET', '/api/photos')
+            ->withHeader('If-None-Match', $etag);
+        $response = $app->handle($request);
+
+        self::assertSame(304, $response->getStatusCode());
+        self::assertSame('public, max-age=15, stale-while-revalidate=60', $response->getHeaderLine('Cache-Control'));
+        self::assertSame($etag, $response->getHeaderLine('ETag'));
+        self::assertSame('', (string) $response->getBody());
+    }
+
+    public function testMediaSourceStatusApiReturnsNotModifiedWhenTheEtagMatches(): void
+    {
+        $photosDir = dirname(__DIR__, 3) . '/storage/photos';
+        $app = createApp($photosDir, 'https://img.example.com', null, true, '/media');
+
+        $initialResponse = $app->handle((new ServerRequestFactory())->createServerRequest('GET', '/api/media-sources'));
+        $etag = $initialResponse->getHeaderLine('ETag');
+
+        $request = (new ServerRequestFactory())
+            ->createServerRequest('GET', '/api/media-sources')
+            ->withHeader('If-None-Match', $etag);
+        $response = $app->handle($request);
+
+        self::assertSame(304, $response->getStatusCode());
+        self::assertSame('public, max-age=15, stale-while-revalidate=60', $response->getHeaderLine('Cache-Control'));
+        self::assertSame($etag, $response->getHeaderLine('ETag'));
+        self::assertSame('', (string) $response->getBody());
     }
 
     public function testMediaRouteReturnsNotModifiedWhenTheEtagMatches(): void

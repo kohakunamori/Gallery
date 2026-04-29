@@ -1,4 +1,11 @@
 import type { GalleryConcreteMediaSource } from '../utils/gallerySettings';
+import { createSessionRequestCache } from './requestCache';
+
+function getMediaSourceStatusesApiUrl() {
+  const path = '/api/media-sources';
+
+  return typeof window === 'undefined' ? path : new URL(path, window.location.origin).toString();
+}
 
 export type MediaSourceUsage = {
   period: string;
@@ -21,14 +28,26 @@ export type MediaSourceStatus = {
   usage?: MediaSourceUsage;
 };
 
-export async function fetchMediaSourceStatuses(signal?: AbortSignal): Promise<MediaSourceStatus[]> {
-  const response = await fetch('/api/media-sources', { signal });
+const mediaSourceStatusesRequestCache = createSessionRequestCache<MediaSourceStatus[]>();
 
-  if (!response.ok) {
-    throw new Error(`Request failed with status ${response.status}`);
-  }
+export function resetMediaSourceStatusRequestCache() {
+  mediaSourceStatusesRequestCache.reset();
+}
 
-  const payload = (await response.json()) as { items: MediaSourceStatus[] };
+export function fetchMediaSourceStatuses(signal?: AbortSignal): Promise<MediaSourceStatus[]> {
+  return mediaSourceStatusesRequestCache.read(
+    'media-source-statuses',
+    async (sharedSignal) => {
+      const response = await fetch(getMediaSourceStatusesApiUrl(), { signal: sharedSignal });
 
-  return payload.items;
+      if (!response.ok) {
+        throw new Error(`Request failed with status ${response.status}`);
+      }
+
+      const payload = (await response.json()) as { items: MediaSourceStatus[] };
+
+      return payload.items;
+    },
+    signal,
+  );
 }
