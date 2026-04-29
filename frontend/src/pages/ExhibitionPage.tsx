@@ -36,6 +36,7 @@ const DOWNWARD_HIDE_THRESHOLD = 64;
 const UPWARD_REVEAL_THRESHOLD = 96;
 const AUTO_MEDIA_SOURCE_CANDIDATES: GalleryConcreteMediaSource[] = ['r2', 'qiniu'];
 const IMAGE_PROBE_TIMEOUT_MS = 3000;
+const IMAGE_CACHE_PROBE_QUERY_PARAM = 'cacheProbe';
 
 function getMediaSourceStatus(
   mediaSourceStatuses: MediaSourceStatus[],
@@ -79,6 +80,9 @@ function probeImage(url: string, signal?: AbortSignal): Promise<void> {
     }
 
     const image = new Image();
+    const probeUrl = new URL(url, window.location.origin);
+    probeUrl.searchParams.set(IMAGE_CACHE_PROBE_QUERY_PARAM, '1');
+
     const timeoutId = window.setTimeout(() => {
       cleanup();
       reject(new Error(`Image probe timed out for ${url}`));
@@ -100,13 +104,14 @@ function probeImage(url: string, signal?: AbortSignal): Promise<void> {
       cleanup();
       resolve();
     };
+
     image.onerror = () => {
       cleanup();
       reject(new Error(`Image probe failed for ${url}`));
     };
 
     signal?.addEventListener('abort', handleAbort, { once: true });
-    image.src = url;
+    image.src = probeUrl.toString();
   });
 }
 
