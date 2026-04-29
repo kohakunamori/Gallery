@@ -10,3 +10,4 @@ stitch_exports/
 .worktrees/
 *.zip
 script/upload_r2.env
+./trellis
