@@ -1,5 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react';
+import type {
+  KeyboardEvent as ReactKeyboardEvent,
+  MouseEvent as ReactMouseEvent,
+  TouchEvent as ReactTouchEvent,
+} from 'react';
 import type { Photo } from '../../types/photo';
 import { getCachedPhotoImageUrl, markPhotoImageAsLoaded, preloadPhotoImage } from '../exhibition/WaterfallCard';
 
@@ -19,10 +23,13 @@ const FOCUSABLE_SELECTOR = [
   '[tabindex]:not([tabindex="-1"])',
 ].join(', ');
 
+const SWIPE_THRESHOLD_PX = 48;
+
 export function PhotoViewerModal({ photos, selectedIndex, onSelectIndex, onClose }: PhotoViewerModalProps) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const previouslyFocusedElementRef = useRef<HTMLElement | null>(null);
+  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
   const photo = photos[selectedIndex];
   const [displayedImageUrl, setDisplayedImageUrl] = useState(() => (photo ? getCachedPhotoImageUrl(photo.id) ?? photo.url : ''));
 
@@ -67,6 +74,18 @@ export function PhotoViewerModal({ photos, selectedIndex, onSelectIndex, onClose
   const isFirstPhoto = selectedIndex === 0;
   const isLastPhoto = selectedIndex === photos.length - 1;
 
+  const selectPreviousPhoto = () => {
+    if (!isFirstPhoto) {
+      onSelectIndex(selectedIndex - 1);
+    }
+  };
+
+  const selectNextPhoto = () => {
+    if (!isLastPhoto) {
+      onSelectIndex(selectedIndex + 1);
+    }
+  };
+
   const handleBackdropClick = (event: ReactMouseEvent<HTMLDivElement>) => {
     if (event.target === event.currentTarget) {
       onClose();
@@ -108,7 +127,7 @@ export function PhotoViewerModal({ photos, selectedIndex, onSelectIndex, onClose
     if (event.key === 'ArrowLeft') {
       if (!isFirstPhoto) {
         event.preventDefault();
-        onSelectIndex(selectedIndex - 1);
+        selectPreviousPhoto();
       }
       return;
     }
@@ -116,9 +135,48 @@ export function PhotoViewerModal({ photos, selectedIndex, onSelectIndex, onClose
     if (event.key === 'ArrowRight') {
       if (!isLastPhoto) {
         event.preventDefault();
-        onSelectIndex(selectedIndex + 1);
+        selectNextPhoto();
       }
     }
+  };
+
+  const handleTouchStart = (event: ReactTouchEvent<HTMLDivElement>) => {
+    const touch = event.touches[0];
+
+    if (touch === undefined) {
+      return;
+    }
+
+    touchStartRef.current = { x: touch.clientX, y: touch.clientY };
+  };
+
+  const handleTouchEnd = (event: ReactTouchEvent<HTMLDivElement>) => {
+    const touchStart = touchStartRef.current;
+    const touch = event.changedTouches[0];
+
+    touchStartRef.current = null;
+
+    if (touchStart === null || touch === undefined) {
+      return;
+    }
+
+    const deltaX = touch.clientX - touchStart.x;
+    const deltaY = touch.clientY - touchStart.y;
+
+    if (Math.abs(deltaX) < SWIPE_THRESHOLD_PX || Math.abs(deltaX) <= Math.abs(deltaY)) {
+      return;
+    }
+
+    if (deltaX < 0) {
+      selectNextPhoto();
+      return;
+    }
+
+    selectPreviousPhoto();
+  };
+
+  const handleTouchCancel = () => {
+    touchStartRef.current = null;
   };
 
   return (
@@ -147,13 +205,19 @@ export function PhotoViewerModal({ photos, selectedIndex, onSelectIndex, onClose
         type="button"
         aria-label="Previous image"
         disabled={isFirstPhoto}
-        onClick={() => onSelectIndex(selectedIndex - 1)}
+        onClick={selectPreviousPhoto}
         className="absolute left-4 top-1/2 -translate-y-1/2 rounded-full bg-black/40 px-4 py-4 text-sm font-medium text-white backdrop-blur disabled:cursor-not-allowed disabled:opacity-30 md:left-8"
       >
         Prev
       </button>
 
-      <div className="flex max-h-full max-w-6xl flex-col items-center gap-4" onClick={(event) => event.stopPropagation()}>
+      <div
+        className="flex max-h-full max-w-6xl flex-col items-center gap-4"
+        onClick={(event) => event.stopPropagation()}
+        onTouchStart={handleTouchStart}
+        onTouchEnd={handleTouchEnd}
+        onTouchCancel={handleTouchCancel}
+      >
         <img
           src={displayedImageUrl}
           alt={photo.filename}
@@ -176,7 +240,7 @@ export function PhotoViewerModal({ photos, selectedIndex, onSelectIndex, onClose
         type="button"
         aria-label="Next image"
         disabled={isLastPhoto}
-        onClick={() => onSelectIndex(selectedIndex + 1)}
+        onClick={selectNextPhoto}
         className="absolute right-4 top-1/2 -translate-y-1/2 rounded-full bg-black/40 px-4 py-4 text-sm font-medium text-white backdrop-blur disabled:cursor-not-allowed disabled:opacity-30 md:right-8"
       >
         Next

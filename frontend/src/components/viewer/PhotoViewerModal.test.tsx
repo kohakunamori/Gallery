@@ -115,6 +115,92 @@ describe('PhotoViewerModal', () => {
     expect(onSelectIndex).toHaveBeenCalledWith(1);
   });
 
+  it('navigates to the next and previous image with horizontal swipes', () => {
+    const onSelectIndex = vi.fn();
+
+    const { rerender } = render(
+      <PhotoViewerModal
+        photos={photos}
+        selectedIndex={0}
+        onSelectIndex={onSelectIndex}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const firstImage = screen.getByRole('img', { name: 'one.jpg' });
+    const firstContent = firstImage.parentElement;
+
+    expect(firstContent).not.toBeNull();
+
+    fireEvent.touchStart(firstContent as HTMLElement, {
+      touches: [{ clientX: 220, clientY: 120 }],
+    });
+    fireEvent.touchEnd(firstContent as HTMLElement, {
+      changedTouches: [{ clientX: 120, clientY: 128 }],
+    });
+
+    expect(onSelectIndex).toHaveBeenCalledWith(1);
+
+    rerender(
+      <PhotoViewerModal
+        photos={photos}
+        selectedIndex={1}
+        onSelectIndex={onSelectIndex}
+        onClose={vi.fn()}
+      />,
+    );
+
+    onSelectIndex.mockClear();
+
+    const secondImage = screen.getByRole('img', { name: 'two.jpg' });
+    const secondContent = secondImage.parentElement;
+
+    expect(secondContent).not.toBeNull();
+
+    fireEvent.touchStart(secondContent as HTMLElement, {
+      touches: [{ clientX: 120, clientY: 120 }],
+    });
+    fireEvent.touchEnd(secondContent as HTMLElement, {
+      changedTouches: [{ clientX: 220, clientY: 128 }],
+    });
+
+    expect(onSelectIndex).toHaveBeenCalledWith(0);
+  });
+
+  it('ignores short or mostly vertical swipes', () => {
+    const onSelectIndex = vi.fn();
+
+    render(
+      <PhotoViewerModal
+        photos={photos}
+        selectedIndex={0}
+        onSelectIndex={onSelectIndex}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const image = screen.getByRole('img', { name: 'one.jpg' });
+    const content = image.parentElement;
+
+    expect(content).not.toBeNull();
+
+    fireEvent.touchStart(content as HTMLElement, {
+      touches: [{ clientX: 200, clientY: 100 }],
+    });
+    fireEvent.touchEnd(content as HTMLElement, {
+      changedTouches: [{ clientX: 170, clientY: 104 }],
+    });
+
+    fireEvent.touchStart(content as HTMLElement, {
+      touches: [{ clientX: 200, clientY: 100 }],
+    });
+    fireEvent.touchEnd(content as HTMLElement, {
+      changedTouches: [{ clientX: 170, clientY: 220 }],
+    });
+
+    expect(onSelectIndex).not.toHaveBeenCalled();
+  });
+
   it('preloads the adjacent original image when the modal opens', () => {
     const preloadSpy = vi.spyOn(WaterfallCardModule, 'preloadPhotoImage').mockImplementation(() => {});
 
