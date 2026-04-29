@@ -8,8 +8,6 @@ type LoadTriggerProps = {
   rootMargin?: string;
 };
 
-const MIN_TRIGGER_INTERVAL_MS = 250;
-
 export const LoadTrigger = memo(function LoadTrigger({
   disabled,
   isComplete,
@@ -21,66 +19,10 @@ export const LoadTrigger = memo(function LoadTrigger({
   const onLoadMoreRef = useRef(onLoadMore);
   const hasTriggeredForCurrentEntryRef = useRef(false);
   const isIntersectingRef = useRef(false);
-  const lastTriggeredAtRef = useRef(0);
-  const scheduledTriggerTimeoutRef = useRef<number | null>(null);
-  const disabledRef = useRef(disabled);
-  const isCompleteRef = useRef(isComplete);
 
   useEffect(() => {
     onLoadMoreRef.current = onLoadMore;
   }, [onLoadMore]);
-
-  const clearScheduledTrigger = () => {
-    if (scheduledTriggerTimeoutRef.current === null) {
-      return;
-    }
-
-    window.clearTimeout(scheduledTriggerTimeoutRef.current);
-    scheduledTriggerTimeoutRef.current = null;
-  };
-
-  const triggerLoadMore = () => {
-    clearScheduledTrigger();
-    hasTriggeredForCurrentEntryRef.current = true;
-    lastTriggeredAtRef.current = Date.now();
-    onLoadMoreRef.current();
-  };
-
-  const scheduleLoadMoreIfNeeded = () => {
-    if (disabledRef.current || isCompleteRef.current || !isIntersectingRef.current || hasTriggeredForCurrentEntryRef.current) {
-      return;
-    }
-
-    const remainingCooldown = Math.max(0, MIN_TRIGGER_INTERVAL_MS - (Date.now() - lastTriggeredAtRef.current));
-
-    if (remainingCooldown === 0) {
-      triggerLoadMore();
-      return;
-    }
-
-    if (scheduledTriggerTimeoutRef.current !== null) {
-      return;
-    }
-
-    scheduledTriggerTimeoutRef.current = window.setTimeout(() => {
-      scheduledTriggerTimeoutRef.current = null;
-
-      if (disabledRef.current || isCompleteRef.current || !isIntersectingRef.current || hasTriggeredForCurrentEntryRef.current) {
-        return;
-      }
-
-      triggerLoadMore();
-    }, remainingCooldown);
-  };
-
-  useEffect(() => {
-    disabledRef.current = disabled;
-    isCompleteRef.current = isComplete;
-
-    if (disabled || isComplete) {
-      clearScheduledTrigger();
-    }
-  }, [disabled, isComplete]);
 
   useEffect(() => {
     if (disabled || isComplete) {
@@ -90,15 +32,10 @@ export const LoadTrigger = memo(function LoadTrigger({
     hasTriggeredForCurrentEntryRef.current = false;
 
     if (isIntersectingRef.current) {
-      scheduleLoadMoreIfNeeded();
+      hasTriggeredForCurrentEntryRef.current = true;
+      onLoadMoreRef.current();
     }
   }, [disabled, isComplete, resetKey]);
-
-  useEffect(() => {
-    return () => {
-      clearScheduledTrigger();
-    };
-  }, []);
 
   useEffect(() => {
     if (disabled || isComplete || triggerRef.current === null) {
@@ -123,7 +60,8 @@ export const LoadTrigger = memo(function LoadTrigger({
         return;
       }
 
-      triggerLoadMore();
+      hasTriggeredForCurrentEntryRef.current = true;
+      onLoadMoreRef.current();
     }, { rootMargin });
 
     observer.observe(triggerRef.current);

@@ -63,38 +63,22 @@ function getObserverForElement(element: Element) {
 }
 
 class MockImage {
-  static requestedUrls: string[] = [];
-  static failingUrls = new Set<string>();
-
   onload: (() => void) | null = null;
   onerror: (() => void) | null = null;
 
-  set src(value: string) {
-    MockImage.requestedUrls.push(value);
-
+  set src(_value: string) {
     queueMicrotask(() => {
-      if (MockImage.failingUrls.has(value)) {
-        this.onerror?.();
-        return;
-      }
-
       this.onload?.();
     });
   }
-}
-
-function getProbeUrl(url: string) {
-  const probeUrl = new URL(url, window.location.origin);
-  probeUrl.searchParams.set('cacheProbe', '1');
-  return probeUrl.toString();
 }
 
 const photos = [
   {
     id: 'late-afternoon',
     filename: 'late-afternoon.jpg',
-    url: 'https://r2.example.com/late-afternoon.jpg?v=late-afternoon',
-    thumbnailUrl: 'https://r2.example.com/late-afternoon.jpg?v=late-afternoon',
+    url: '/media/late-afternoon.jpg',
+    thumbnailUrl: '/media/late-afternoon.jpg',
     takenAt: '2026-03-31T16:30:00Z',
     sortTime: '2026-03-31T16:30:00Z',
     width: 1000,
@@ -103,8 +87,8 @@ const photos = [
   {
     id: 'fresh',
     filename: 'fresh.jpg',
-    url: 'https://r2.example.com/fresh.jpg?v=fresh',
-    thumbnailUrl: 'https://r2.example.com/fresh.jpg?v=fresh',
+    url: '/media/fresh.jpg',
+    thumbnailUrl: '/media/fresh.jpg',
     takenAt: '2026-03-31T09:00:00Z',
     sortTime: '2026-03-31T09:00:00Z',
     width: 1200,
@@ -113,20 +97,14 @@ const photos = [
   {
     id: 'older',
     filename: 'older.jpg',
-    url: 'https://r2.example.com/older.jpg?v=older',
-    thumbnailUrl: 'https://r2.example.com/older.jpg?v=older',
+    url: '/media/older.jpg',
+    thumbnailUrl: '/media/older.jpg',
     takenAt: '2026-02-28T12:00:00Z',
     sortTime: '2026-02-28T12:00:00Z',
     width: 1600,
     height: 900,
   },
 ];
-
-const qiniuPhotos = photos.map((photo) => ({
-  ...photo,
-  url: photo.url.replace('https://r2.example.com/', 'https://qiniu.example.com/'),
-  thumbnailUrl: photo.thumbnailUrl.replace('https://r2.example.com/', 'https://qiniu.example.com/'),
-}));
 
 const mediaSourceStatuses: MediaSourceStatus[] = [
   {
@@ -166,19 +144,12 @@ describe('ExhibitionPage', () => {
     mockedFetchMediaSourceStatuses.mockReset();
     mockedFetchMediaSourceStatuses.mockResolvedValue(mediaSourceStatuses);
     MockIntersectionObserver.instances = [];
-    MockImage.requestedUrls = [];
-    MockImage.failingUrls.clear();
     vi.stubGlobal('IntersectionObserver', MockIntersectionObserver);
     vi.stubGlobal('Image', MockImage);
     window.localStorage.clear();
     GALLERY_MEDIA_SOURCE_VISIBILITY.r2 = true;
     GALLERY_MEDIA_SOURCE_VISIBILITY.qiniu = true;
     GALLERY_MEDIA_SOURCE_VISIBILITY.local = true;
-    Object.defineProperty(window, 'innerWidth', {
-      writable: true,
-      configurable: true,
-      value: 1280,
-    });
     Object.defineProperty(window, 'scrollY', {
       writable: true,
       configurable: true,
@@ -489,45 +460,6 @@ describe('ExhibitionPage', () => {
     expect(mockedFetchPhotos).toHaveBeenNthCalledWith(2, 'qiniu', expect.any(AbortSignal));
   });
 
-  it('probes the first auto media source with a reload fetch before rendering images', async () => {
-    window.localStorage.setItem(
-      GALLERY_SETTINGS_STORAGE_KEY,
-      JSON.stringify({
-        columnPreference: 'auto',
-        sortPreference: 'newest',
-        mediaSourcePreference: 'auto',
-      }),
-    );
-
-    render(<ExhibitionPage />);
-
-    await screen.findByRole('button', { name: 'Open late-afternoon.jpg' });
-
-    expect(MockImage.requestedUrls).toContain(getProbeUrl(photos[0].thumbnailUrl));
-  });
-
-  it('falls back to qiniu when the r2 probe fails', async () => {
-    window.localStorage.setItem(
-      GALLERY_SETTINGS_STORAGE_KEY,
-      JSON.stringify({
-        columnPreference: 'auto',
-        sortPreference: 'newest',
-        mediaSourcePreference: 'auto',
-      }),
-    );
-    mockedFetchPhotos.mockImplementation(async (mediaSource) => (mediaSource === 'qiniu' ? qiniuPhotos : photos));
-    MockImage.failingUrls.add(getProbeUrl(photos[0].thumbnailUrl));
-
-    render(<ExhibitionPage />);
-
-    await screen.findByRole('button', { name: 'Open late-afternoon.jpg' });
-
-    expect(mockedFetchPhotos).toHaveBeenNthCalledWith(1, 'r2', expect.any(AbortSignal));
-    expect(mockedFetchPhotos).toHaveBeenNthCalledWith(2, 'qiniu', expect.any(AbortSignal));
-    expect(MockImage.requestedUrls).toContain(getProbeUrl(photos[0].thumbnailUrl));
-    expect(MockImage.requestedUrls).toContain(getProbeUrl(qiniuPhotos[0].thumbnailUrl));
-  });
-
   it('hydrates localStorage custom column counts on first render', async () => {
     window.localStorage.setItem(
       GALLERY_SETTINGS_STORAGE_KEY,
@@ -809,12 +741,12 @@ describe('ExhibitionPage', () => {
 
     await screen.findByRole('button', { name: 'Open photo-0.jpg' });
 
-    expect(screen.queryByRole('button', { name: 'Open photo-16.jpg' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Open photo-24.jpg' })).not.toBeInTheDocument();
 
     const loadTrigger = screen.getByText('Continue scrolling');
     const loadTriggerObserver = getObserverForElement(loadTrigger);
 
-    expect(loadTriggerObserver?.options?.rootMargin).toBe('800px 0px');
+    expect(loadTriggerObserver?.options?.rootMargin).toBe('1200px 0px');
 
     act(() => {
       loadTriggerObserver?.trigger(loadTrigger, true);
@@ -841,7 +773,7 @@ describe('ExhibitionPage', () => {
 
     await screen.findByRole('button', { name: 'Open photo-0.jpg' });
 
-    expect(screen.queryByRole('button', { name: 'Open photo-16.jpg' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Open photo-24.jpg' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Open photo-39.jpg' })).not.toBeInTheDocument();
 
     const loadTrigger = screen.getByText('Continue scrolling');

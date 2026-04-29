@@ -27,7 +27,7 @@ describe('fetchPhotos', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     await expect(fetchPhotos('r2')).resolves.toEqual([samplePhoto]);
-    expect(fetchMock).toHaveBeenCalledWith(new URL('/api/photos?mediaSource=r2', window.location.origin).toString(), { signal: expect.any(AbortSignal) });
+    expect(fetchMock).toHaveBeenCalledWith('/api/photos?mediaSource=r2', { signal: expect.any(AbortSignal) });
   });
 
   it('throws on non-ok responses', async () => {
@@ -52,7 +52,7 @@ describe('fetchPhotos', () => {
 
     await fetchPhotos('r2');
 
-    expect(fetchMock).toHaveBeenCalledWith(new URL('/api/photos?mediaSource=r2', window.location.origin).toString(), { signal: expect.any(AbortSignal) });
+    expect(fetchMock).toHaveBeenCalledWith('/api/photos?mediaSource=r2', { signal: expect.any(AbortSignal) });
   });
 
   it('deduplicates concurrent requests for the same media source', async () => {

@@ -4,12 +4,6 @@ import { createSessionRequestCache } from './requestCache';
 
 const photosRequestCache = createSessionRequestCache<Photo[]>();
 
-function getPhotosApiUrl(mediaSource: GalleryConcreteMediaSource) {
-  const path = `/api/photos?mediaSource=${encodeURIComponent(mediaSource)}`;
-
-  return typeof window === 'undefined' ? path : new URL(path, window.location.origin).toString();
-}
-
 export function resetPhotoRequestCache() {
   photosRequestCache.reset();
 }
@@ -18,7 +12,7 @@ export function fetchPhotos(mediaSource: GalleryConcreteMediaSource, signal?: Ab
   return photosRequestCache.read(
     mediaSource,
     async (sharedSignal) => {
-      const response = await fetch(getPhotosApiUrl(mediaSource), { signal: sharedSignal });
+      const response = await fetch(`/api/photos?mediaSource=${encodeURIComponent(mediaSource)}`, { signal: sharedSignal });
 
       if (!response.ok) {
         throw new Error(`Request failed with status ${response.status}`);

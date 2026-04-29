@@ -10,15 +10,20 @@ type WaterfallGalleryProps = {
   onOpen: (photoId: string) => void;
 };
 
-const AUTO_COLUMN_TARGET_WIDTH = 360;
-const MAX_AUTO_COLUMN_COUNT = 6;
-
 export function getAutoColumnCount(viewportWidth: number) {
-  const safeViewportWidth = Math.max(viewportWidth, AUTO_COLUMN_TARGET_WIDTH);
+  if (viewportWidth >= 1536) {
+    return 4;
+  }
 
-  return clampGalleryColumnCount(
-    Math.min(MAX_AUTO_COLUMN_COUNT, Math.max(1, Math.round(safeViewportWidth / AUTO_COLUMN_TARGET_WIDTH))),
-  );
+  if (viewportWidth >= 1024) {
+    return 3;
+  }
+
+  if (viewportWidth >= 640) {
+    return 2;
+  }
+
+  return 1;
 }
 
 export function resolveColumnCount(viewportWidth: number, columnPreference: GalleryColumnPreference) {
@@ -65,104 +70,43 @@ export function getPreloadWindowSize(columnCount: number) {
 }
 
 export function getImageRootMargin(columnCount: number) {
-  if (columnCount >= 5) {
-    return '800px 0px';
+  if (columnCount >= 7) {
+    return '300px 0px';
   }
 
-  if (columnCount >= 3) {
-    return '1000px 0px';
+  if (columnCount >= 5) {
+    return '600px 0px';
   }
 
   return '1200px 0px';
 }
 
-export function getImageReleaseRootMargin(columnCount: number) {
-  if (columnCount >= 5) {
-    return '2200px 0px';
-  }
-
-  if (columnCount >= 3) {
-    return '2600px 0px';
-  }
-
-  return '3000px 0px';
-}
-
 export function getLoadTriggerRootMargin(columnCount: number) {
-  if (columnCount >= 5) {
-    return '600px 0px';
+  if (columnCount >= 7) {
+    return '400px 0px';
   }
 
-  if (columnCount >= 3) {
+  if (columnCount >= 5) {
     return '800px 0px';
   }
 
-  return '1000px 0px';
-}
-
-export function getInitialVisibleCount(columnCount: number) {
-  if (columnCount <= 2) {
-    return columnCount * 5;
-  }
-
-  return Math.min(24, columnCount * 4);
+  return '1200px 0px';
 }
 
 export function getLoadMoreCount(columnCount: number) {
-  if (columnCount <= 2) {
-    return columnCount * 4;
+  if (columnCount >= 7) {
+    return 12;
   }
 
-  return Math.min(24, columnCount * 3);
+  if (columnCount >= 5) {
+    return 16;
+  }
+
+  return 24;
 }
 
 export function shouldReleaseOffscreenImages(columnCount: number) {
-  return columnCount >= 2;
-}
-
-export function getPriorityPhotoCount(columnCount: number) {
-  if (columnCount <= 1) {
-    return 1;
-  }
-
-  if (columnCount === 2) {
-    return 2;
-  }
-
-  return 3;
-}
-
-export function getPriorityPhotoIds(columns: Photo[][], limit: number) {
-  if (limit <= 0) {
-    return [];
-  }
-
-  const priorityPhotoIds: string[] = [];
-
-  for (let rowIndex = 0; priorityPhotoIds.length < limit; rowIndex += 1) {
-    let hasPhotoInRow = false;
-
-    for (const column of columns) {
-      const photo = column[rowIndex];
-
-      if (photo === undefined) {
-        continue;
-      }
-
-      hasPhotoInRow = true;
-      priorityPhotoIds.push(photo.id);
-
-      if (priorityPhotoIds.length === limit) {
-        break;
-      }
-    }
-
-    if (!hasPhotoInRow) {
-      break;
-    }
-  }
-
-  return priorityPhotoIds;
+  return columnCount >= 7;
 }
 
 export function getPreloadPhotoIds(columns: Photo[][], seenPhotoIds: Set<string>, limit: number) {
@@ -249,10 +193,6 @@ export const WaterfallGallery = memo(function WaterfallGallery({ photos, columnP
 
   const resolvedColumnCount = columnPreference === 'auto' ? autoColumnCount : clampGalleryColumnCount(columnPreference);
   const columns = useMemo(() => distributePhotosIntoColumns(photos, resolvedColumnCount), [photos, resolvedColumnCount]);
-  const priorityPhotoIds = useMemo(
-    () => new Set(getPriorityPhotoIds(columns, getPriorityPhotoCount(resolvedColumnCount))),
-    [columns, resolvedColumnCount],
-  );
 
   const syncPreloadPhotoIds = useCallback(() => {
     const nextSeenPhotoIds = new Set<string>();
@@ -317,10 +257,8 @@ export const WaterfallGallery = memo(function WaterfallGallery({ photos, columnP
               photo={photo}
               onOpen={onOpen}
               shouldPreload={preloadPhotoIds.has(photo.id)}
-              isPriority={priorityPhotoIds.has(photo.id)}
               onEnterViewport={handlePhotoEnterViewport}
               rootMargin={getImageRootMargin(resolvedColumnCount)}
-              releaseRootMargin={getImageReleaseRootMargin(resolvedColumnCount)}
               releaseImageOnExit={shouldReleaseOffscreenImages(resolvedColumnCount)}
             />
           ))}

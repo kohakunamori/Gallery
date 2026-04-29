@@ -1,12 +1,6 @@
 import type { GalleryConcreteMediaSource } from '../utils/gallerySettings';
 import { createSessionRequestCache } from './requestCache';
 
-function getMediaSourceStatusesApiUrl() {
-  const path = '/api/media-sources';
-
-  return typeof window === 'undefined' ? path : new URL(path, window.location.origin).toString();
-}
-
 export type MediaSourceUsage = {
   period: string;
   usedBytes: number;
@@ -38,7 +32,7 @@ export function fetchMediaSourceStatuses(signal?: AbortSignal): Promise<MediaSou
   return mediaSourceStatusesRequestCache.read(
     'media-source-statuses',
     async (sharedSignal) => {
-      const response = await fetch(getMediaSourceStatusesApiUrl(), { signal: sharedSignal });
+      const response = await fetch('/api/media-sources', { signal: sharedSignal });
 
       if (!response.ok) {
         throw new Error(`Request failed with status ${response.status}`);

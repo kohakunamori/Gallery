@@ -32,7 +32,6 @@ export function PhotoViewerModal({ photos, selectedIndex, onSelectIndex, onClose
   const touchStartRef = useRef<{ x: number; y: number } | null>(null);
   const photo = photos[selectedIndex];
   const [displayedImageUrl, setDisplayedImageUrl] = useState(() => (photo ? getCachedPhotoImageUrl(photo.id) ?? photo.url : ''));
-  const [loadedPhotoId, setLoadedPhotoId] = useState<string | null>(null);
 
   useEffect(() => {
     if (photo === undefined) {
@@ -40,11 +39,10 @@ export function PhotoViewerModal({ photos, selectedIndex, onSelectIndex, onClose
     }
 
     setDisplayedImageUrl(getCachedPhotoImageUrl(photo.id) ?? photo.url);
-    setLoadedPhotoId(null);
   }, [photo?.id, photo?.url]);
 
   useEffect(() => {
-    if (photo === undefined || loadedPhotoId !== photo.id) {
+    if (photo === undefined) {
       return;
     }
 
@@ -58,7 +56,7 @@ export function PhotoViewerModal({ photos, selectedIndex, onSelectIndex, onClose
     if (nextPhoto !== undefined) {
       preloadPhotoImage(nextPhoto.id, nextPhoto.url);
     }
-  }, [loadedPhotoId, photo, photos, selectedIndex]);
+  }, [photo, photos, selectedIndex]);
 
   useEffect(() => {
     previouslyFocusedElementRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -224,13 +222,9 @@ export function PhotoViewerModal({ photos, selectedIndex, onSelectIndex, onClose
           src={displayedImageUrl}
           alt={photo.filename}
           fetchPriority="high"
-          decoding="async"
-          width={photo.width ?? undefined}
-          height={photo.height ?? undefined}
           className="max-h-[80vh] max-w-full object-contain"
           onLoad={() => {
             markPhotoImageAsLoaded(photo.id, displayedImageUrl);
-            setLoadedPhotoId(photo.id);
           }}
           onError={() => {
             if (displayedImageUrl !== photo.url) {

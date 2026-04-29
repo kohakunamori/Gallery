@@ -37,7 +37,7 @@ describe('fetchMediaSourceStatuses', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     await expect(fetchMediaSourceStatuses()).resolves.toEqual(sampleStatuses);
-    expect(fetchMock).toHaveBeenCalledWith(new URL('/api/media-sources', window.location.origin).toString(), { signal: expect.any(AbortSignal) });
+    expect(fetchMock).toHaveBeenCalledWith('/api/media-sources', { signal: expect.any(AbortSignal) });
   });
 
   it('throws on non-ok responses', async () => {

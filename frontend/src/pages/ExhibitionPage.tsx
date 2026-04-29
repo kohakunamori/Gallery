@@ -3,13 +3,13 @@ import { ExhibitionHeader } from '../components/exhibition/ExhibitionHeader';
 import { ExhibitionHero } from '../components/exhibition/ExhibitionHero';
 import { ExhibitionSection } from '../components/exhibition/ExhibitionSection';
 import {
-  getInitialVisibleCount,
+  getAutoColumnCount,
   getLoadMoreCount,
   getLoadTriggerRootMargin,
-  resolveColumnCount,
 } from '../components/exhibition/WaterfallGallery';
 import { GallerySettingsModal } from '../components/exhibition/GallerySettingsModal';
 import {
+  clampGalleryColumnCount,
   normalizeGalleryMediaSourcePreference,
   readGallerySettings,
   writeGallerySettings,
@@ -30,13 +30,12 @@ import { readSelectedPhotoId, writeSelectedPhotoId } from '../utils/photoQuery';
 import { groupPhotosByMonth } from '../utils/groupPhotosByMonth';
 import { sortPhotos } from '../utils/sortPhotos';
 
-const DEFAULT_VIEWPORT_WIDTH = 1280;
+const INITIAL_VISIBLE_COUNT = 24;
 const TOP_VISIBILITY_THRESHOLD = 24;
 const DOWNWARD_HIDE_THRESHOLD = 64;
 const UPWARD_REVEAL_THRESHOLD = 96;
 const AUTO_MEDIA_SOURCE_CANDIDATES: GalleryConcreteMediaSource[] = ['r2', 'qiniu'];
 const IMAGE_PROBE_TIMEOUT_MS = 3000;
-const IMAGE_CACHE_PROBE_QUERY_PARAM = 'cacheProbe';
 
 function getMediaSourceStatus(
   mediaSourceStatuses: MediaSourceStatus[],
@@ -50,18 +49,6 @@ function getAutoMediaSourceStatusSignature(mediaSourceStatuses: MediaSourceStatu
     const status = getMediaSourceStatus(mediaSourceStatuses, mediaSource);
     return `${mediaSource}:${status?.isAvailable ?? false}:${status?.isDisabled ?? false}:${status?.status ?? 'unknown'}`;
   }).join('|');
-}
-
-function getViewportWidth() {
-  return typeof window === 'undefined' ? DEFAULT_VIEWPORT_WIDTH : window.innerWidth;
-}
-
-function getResolvedColumnCountForPreference(columnPreference: GalleryColumnPreference) {
-  return resolveColumnCount(getViewportWidth(), columnPreference);
-}
-
-function getInitialVisiblePhotoCount(columnPreference: GalleryColumnPreference) {
-  return getInitialVisibleCount(getResolvedColumnCountForPreference(columnPreference));
 }
 
 function isAbortError(error: unknown): error is DOMException {
@@ -80,9 +67,6 @@ function probeImage(url: string, signal?: AbortSignal): Promise<void> {
     }
 
     const image = new Image();
-    const probeUrl = new URL(url, window.location.origin);
-    probeUrl.searchParams.set(IMAGE_CACHE_PROBE_QUERY_PARAM, '1');
-
     const timeoutId = window.setTimeout(() => {
       cleanup();
       reject(new Error(`Image probe timed out for ${url}`));
@@ -104,14 +88,13 @@ function probeImage(url: string, signal?: AbortSignal): Promise<void> {
       cleanup();
       resolve();
     };
-
     image.onerror = () => {
       cleanup();
       reject(new Error(`Image probe failed for ${url}`));
     };
 
     signal?.addEventListener('abort', handleAbort, { once: true });
-    image.src = probeUrl.toString();
+    image.src = url;
   });
 }
 
@@ -145,11 +128,11 @@ async function resolveAutoMediaSourcePhotos(
 }
 
 export function ExhibitionPage() {
-  const [persistedSettings] = useState(readGallerySettings);
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [status, setStatus] = useState<'loading' | 'ready' | 'empty' | 'error'>('loading');
-  const [visibleCount, setVisibleCount] = useState(() => getInitialVisiblePhotoCount(persistedSettings.columnPreference));
+  const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_COUNT);
   const [selectedPhotoId, setSelectedPhotoId] = useState<string | null>(() => readSelectedPhotoId());
+  const [persistedSettings] = useState(readGallerySettings);
   const [isAtTop, setIsAtTop] = useState(true);
   const [isHeaderVisible, setIsHeaderVisible] = useState(true);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -262,7 +245,7 @@ export function ExhibitionPage() {
     const controller = new AbortController();
 
     setStatus('loading');
-    setVisibleCount(getInitialVisiblePhotoCount(columnPreference));
+    setVisibleCount(INITIAL_VISIBLE_COUNT);
 
     const loadPhotos = async () => {
       try {
@@ -339,10 +322,14 @@ export function ExhibitionPage() {
     () => sortedPhotos.findIndex((photo) => photo.id === selectedPhotoId),
     [selectedPhotoId, sortedPhotos],
   );
-  const resolvedColumnCount = useMemo(
-    () => getResolvedColumnCountForPreference(columnPreference),
-    [columnPreference],
-  );
+  const resolvedColumnCount = useMemo(() => {
+    if (columnPreference !== 'auto') {
+      return clampGalleryColumnCount(columnPreference);
+    }
+
+    const viewportWidth = typeof window === 'undefined' ? 1280 : window.innerWidth;
+    return getAutoColumnCount(viewportWidth);
+  }, [columnPreference]);
   const loadMoreCount = getLoadMoreCount(resolvedColumnCount);
   const loadTriggerRootMargin = getLoadTriggerRootMargin(resolvedColumnCount);
 

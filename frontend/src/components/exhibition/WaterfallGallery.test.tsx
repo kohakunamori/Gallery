@@ -1,15 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   distributePhotosIntoColumns,
-  getImageReleaseRootMargin,
   getImageRootMargin,
-  getInitialVisibleCount,
   getLoadMoreCount,
   getLoadTriggerRootMargin,
   getPreloadPhotoIds,
   getPreloadWindowSize,
-  getPriorityPhotoCount,
-  getPriorityPhotoIds,
   resolveColumnCount,
   shouldReleaseOffscreenImages,
 } from './WaterfallGallery';
@@ -63,7 +59,6 @@ describe('WaterfallGallery helpers', () => {
     expect(resolveColumnCount(768, 'auto')).toBe(2);
     expect(resolveColumnCount(1200, 'auto')).toBe(3);
     expect(resolveColumnCount(1600, 'auto')).toBe(4);
-    expect(resolveColumnCount(2400, 'auto')).toBe(6);
     expect(resolveColumnCount(1200, 2)).toBe(2);
     expect(resolveColumnCount(1200, 6)).toBe(6);
   });
@@ -106,40 +101,21 @@ describe('WaterfallGallery helpers', () => {
     expect(getPreloadWindowSize(8)).toBe(2);
   });
 
-  it('sizes mount, release, and batch thresholds from the resolved column count', () => {
-    expect(getImageRootMargin(2)).toBe('1200px 0px');
-    expect(getImageRootMargin(4)).toBe('1000px 0px');
-    expect(getImageRootMargin(6)).toBe('800px 0px');
+  it('reduces lookahead and batch sizes for dense column layouts', () => {
+    expect(getImageRootMargin(4)).toBe('1200px 0px');
+    expect(getImageRootMargin(6)).toBe('600px 0px');
+    expect(getImageRootMargin(8)).toBe('300px 0px');
 
-    expect(getImageReleaseRootMargin(2)).toBe('3000px 0px');
-    expect(getImageReleaseRootMargin(4)).toBe('2600px 0px');
-    expect(getImageReleaseRootMargin(6)).toBe('2200px 0px');
+    expect(getLoadTriggerRootMargin(4)).toBe('1200px 0px');
+    expect(getLoadTriggerRootMargin(6)).toBe('800px 0px');
+    expect(getLoadTriggerRootMargin(8)).toBe('400px 0px');
 
-    expect(getLoadTriggerRootMargin(2)).toBe('1000px 0px');
-    expect(getLoadTriggerRootMargin(4)).toBe('800px 0px');
-    expect(getLoadTriggerRootMargin(6)).toBe('600px 0px');
+    expect(getLoadMoreCount(4)).toBe(24);
+    expect(getLoadMoreCount(6)).toBe(16);
+    expect(getLoadMoreCount(8)).toBe(12);
 
-    expect(getInitialVisibleCount(1)).toBe(5);
-    expect(getInitialVisibleCount(2)).toBe(10);
-    expect(getInitialVisibleCount(4)).toBe(16);
-    expect(getInitialVisibleCount(6)).toBe(24);
-
-    expect(getLoadMoreCount(2)).toBe(8);
-    expect(getLoadMoreCount(4)).toBe(12);
-    expect(getLoadMoreCount(6)).toBe(18);
-
-    expect(shouldReleaseOffscreenImages(1)).toBe(false);
-    expect(shouldReleaseOffscreenImages(2)).toBe(true);
-  });
-
-  it('prioritizes the top visible row before falling back to the next row', () => {
-    const columns = distributePhotosIntoColumns(photos, 2);
-
-    expect(getPriorityPhotoCount(1)).toBe(1);
-    expect(getPriorityPhotoCount(2)).toBe(2);
-    expect(getPriorityPhotoCount(4)).toBe(3);
-    expect(getPriorityPhotoIds(columns, 2)).toEqual(['one', 'two']);
-    expect(getPriorityPhotoIds(columns, 3)).toEqual(['one', 'two', 'four']);
+    expect(shouldReleaseOffscreenImages(4)).toBe(false);
+    expect(shouldReleaseOffscreenImages(8)).toBe(true);
   });
 
   it('preloads the next two unseen photos from each column after visible cards are seen', () => {

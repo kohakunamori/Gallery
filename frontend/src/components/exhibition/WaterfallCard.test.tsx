@@ -59,10 +59,6 @@ class MockImage {
   }
 }
 
-function getObserverByRootMargin(rootMargin: string) {
-  return MockIntersectionObserver.instances.find((instance) => instance.options?.rootMargin === rootMargin);
-}
-
 beforeEach(() => {
   MockIntersectionObserver.instances = [];
   MockImage.instances = [];
@@ -79,7 +75,7 @@ describe('WaterfallCard', () => {
   it('uses a larger viewport preload margin for card images', () => {
     render(<WaterfallCard photo={photo} onOpen={vi.fn()} />);
 
-    expect(getObserverByRootMargin('1200px 0px')).toBeDefined();
+    expect(MockIntersectionObserver.instances[0]?.options?.rootMargin).toBe('1200px 0px');
   });
 
   it('does not mount the image until the observer reports the card is visible', () => {
@@ -201,26 +197,17 @@ describe('WaterfallCard', () => {
     expect(screen.getByRole('img', { name: 'one.jpg' })).toBeInTheDocument();
   });
 
-  it('releases the image only after it leaves the wider release range in memory-saving mode', () => {
-    render(<WaterfallCard photo={photo} onOpen={vi.fn()} releaseImageOnExit releaseRootMargin="2600px 0px" />);
-
-    const mountObserver = getObserverByRootMargin('1200px 0px');
-    const releaseObserver = getObserverByRootMargin('2600px 0px');
+  it('releases the image after it leaves the observed range in memory-saving mode', () => {
+    render(<WaterfallCard photo={photo} onOpen={vi.fn()} releaseImageOnExit />);
 
     act(() => {
-      mountObserver?.trigger(true);
+      MockIntersectionObserver.instances[0]?.trigger(true);
     });
 
     expect(screen.getByRole('img', { name: 'one.jpg' })).toBeInTheDocument();
 
     act(() => {
-      mountObserver?.trigger(false);
-    });
-
-    expect(screen.getByRole('img', { name: 'one.jpg' })).toBeInTheDocument();
-
-    act(() => {
-      releaseObserver?.trigger(false);
+      MockIntersectionObserver.instances[0]?.trigger(false);
     });
 
     expect(screen.queryByRole('img', { name: 'one.jpg' })).not.toBeInTheDocument();
@@ -235,23 +222,6 @@ describe('WaterfallCard', () => {
 
     expect(screen.getByRole('img', { name: 'one.jpg' })).toHaveAttribute('loading', 'eager');
     expect(screen.getByRole('img', { name: 'one.jpg' })).not.toHaveAttribute('fetchpriority');
-  });
-
-  it('marks priority images with eager loading and high fetch priority', () => {
-    render(<WaterfallCard photo={photo} onOpen={vi.fn()} isPriority />);
-
-    act(() => {
-      MockIntersectionObserver.instances[0]?.trigger(true);
-    });
-
-    const image = screen.getByRole('img', { name: 'one.jpg' });
-
-    expect(image).toHaveAttribute('loading', 'eager');
-    expect(image).toHaveAttribute('fetchpriority', 'high');
-    expect(image).toHaveAttribute('width', '1200');
-    expect(image).toHaveAttribute('height', '800');
-    expect(image.className).toContain('transition-[opacity,transform]');
-    expect(image.className).not.toContain('filter');
   });
 
   it('reveals a preloaded image immediately after it mounts', () => {

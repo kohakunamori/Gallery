@@ -5,15 +5,12 @@ type WaterfallCardProps = {
   photo: Photo;
   onOpen: (photoId: string) => void;
   shouldPreload?: boolean;
-  isPriority?: boolean;
   onEnterViewport?: (photoId: string) => void;
   rootMargin?: string;
-  releaseRootMargin?: string;
   releaseImageOnExit?: boolean;
 };
 
 const DEFAULT_IMAGE_ROOT_MARGIN = '1200px 0px';
-const DEFAULT_IMAGE_RELEASE_ROOT_MARGIN = '2600px 0px';
 const MAX_CACHED_PHOTO_IMAGE_COUNT = 400;
 const MAX_PRELOADED_IMAGE_URL_COUNT = 800;
 const preloadedImageUrls = new Set<string>();
@@ -151,10 +148,8 @@ export const WaterfallCard = memo(function WaterfallCard({
   photo,
   onOpen,
   shouldPreload = false,
-  isPriority = false,
   onEnterViewport,
   rootMargin = DEFAULT_IMAGE_ROOT_MARGIN,
-  releaseRootMargin = DEFAULT_IMAGE_RELEASE_ROOT_MARGIN,
   releaseImageOnExit = false,
 }: WaterfallCardProps) {
   const [displayedThumbnailUrl, setDisplayedThumbnailUrl] = useState<string | null>(() => getInitialDisplayedThumbnailUrl(photo));
@@ -188,47 +183,29 @@ export const WaterfallCard = memo(function WaterfallCard({
       return;
     }
 
-    const cardElement = cardRef.current;
-    const mountObserver = new IntersectionObserver(
+    const observer = new IntersectionObserver(
       ([entry], currentObserver) => {
-        if (!entry?.isIntersecting) {
+        if (entry?.isIntersecting) {
+          if (!releaseImageOnExit) {
+            currentObserver.unobserve(entry.target);
+          }
+
+          setShouldRenderImage(true);
+          onEnterViewport?.(photo.id);
           return;
         }
 
-        if (!releaseImageOnExit) {
-          currentObserver.unobserve(entry.target);
+        if (releaseImageOnExit) {
+          setShouldRenderImage(false);
         }
-
-        setShouldRenderImage(true);
-        onEnterViewport?.(photo.id);
       },
       { rootMargin },
     );
 
-    mountObserver.observe(cardElement);
+    observer.observe(cardRef.current);
 
-    if (!releaseImageOnExit) {
-      return () => mountObserver.disconnect();
-    }
-
-    const releaseObserver = new IntersectionObserver(
-      ([entry]) => {
-        if (entry?.isIntersecting) {
-          return;
-        }
-
-        setShouldRenderImage(false);
-      },
-      { rootMargin: releaseRootMargin },
-    );
-
-    releaseObserver.observe(cardElement);
-
-    return () => {
-      mountObserver.disconnect();
-      releaseObserver.disconnect();
-    };
-  }, [onEnterViewport, photo.id, releaseImageOnExit, releaseRootMargin, rootMargin]);
+    return () => observer.disconnect();
+  }, [onEnterViewport, photo.id, releaseImageOnExit, rootMargin]);
 
   const aspectRatio = useMemo(() => {
     if (photo.width !== null && photo.height !== null && photo.width > 0 && photo.height > 0) {
@@ -251,11 +228,8 @@ export const WaterfallCard = memo(function WaterfallCard({
           <img
             src={imageUrl}
             alt={photo.filename}
-            loading={isPriority || shouldPreload ? 'eager' : 'lazy'}
-            fetchPriority={isPriority ? 'high' : undefined}
+            loading={shouldPreload ? 'eager' : 'lazy'}
             decoding="async"
-            width={photo.width ?? undefined}
-            height={photo.height ?? undefined}
             onLoad={() => {
               markPhotoImageAsLoaded(photo.id, imageUrl);
               setDisplayedThumbnailUrl(imageUrl);
@@ -265,7 +239,7 @@ export const WaterfallCard = memo(function WaterfallCard({
                 setDisplayedThumbnailUrl(photo.thumbnailUrl);
               }
             }}
-            className={`block h-full w-full object-cover transition-[opacity,transform] duration-700 ease-out ${
+            className={`block h-full w-full object-cover transition-[opacity,transform,filter] duration-700 ease-out ${
               isLoaded ? 'opacity-100 saturate-100 group-hover:scale-[1.02]' : 'scale-[1.015] opacity-0 saturate-75'
             }`}
           />
