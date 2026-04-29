@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import type { Photo } from '../../types/photo';
 import type { GalleryColumnPreference } from '../../utils/gallerySettings';
 import { WaterfallGallery } from './WaterfallGallery';
@@ -9,7 +10,7 @@ type ExhibitionSectionProps = {
   onOpen: (photoId: string) => void;
 };
 
-export function ExhibitionSection({ title, photos, columnPreference, onOpen }: ExhibitionSectionProps) {
+export const ExhibitionSection = memo(function ExhibitionSection({ title, photos, columnPreference, onOpen }: ExhibitionSectionProps) {
   return (
     <section className="mb-16">
       <div className="mb-6 flex items-center gap-4">
@@ -19,4 +20,4 @@ export function ExhibitionSection({ title, photos, columnPreference, onOpen }: E
       <WaterfallGallery photos={photos} columnPreference={columnPreference} onOpen={onOpen} />
     </section>
   );
-}
+});

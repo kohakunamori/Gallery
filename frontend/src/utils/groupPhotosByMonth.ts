@@ -6,16 +6,17 @@ type PhotoMonthGroup = {
   latestSortTime: string;
 };
 
+const monthFormatter = new Intl.DateTimeFormat('en-US', {
+  month: 'long',
+  year: 'numeric',
+});
+
 export function groupPhotosByMonth(photos: Photo[]): { title: string; photos: Photo[] }[] {
-  const formatter = new Intl.DateTimeFormat('en-US', {
-    month: 'long',
-    year: 'numeric',
-  });
 
   const groups = new Map<string, PhotoMonthGroup>();
 
   for (const photo of photos) {
-    const title = formatter.format(new Date(photo.sortTime));
+    const title = monthFormatter.format(new Date(photo.sortTime));
     const existingGroup = groups.get(title);
 
     if (existingGroup) {

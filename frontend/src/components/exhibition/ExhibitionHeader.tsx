@@ -1,10 +1,12 @@
+import { memo } from 'react';
+
 type ExhibitionHeaderProps = {
   isAtTop: boolean;
   isVisible: boolean;
   onOpenSettings: () => void;
 };
 
-export function ExhibitionHeader({ isAtTop, isVisible, onOpenSettings }: ExhibitionHeaderProps) {
+export const ExhibitionHeader = memo(function ExhibitionHeader({ isAtTop, isVisible, onOpenSettings }: ExhibitionHeaderProps) {
   return (
     <header className="fixed inset-x-0 top-0 z-40 px-4 py-5 md:px-8" role="banner">
       <div
@@ -71,4 +73,4 @@ export function ExhibitionHeader({ isAtTop, isVisible, onOpenSettings }: Exhibit
       </div>
     </header>
   );
-}
+});
