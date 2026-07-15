@@ -8,18 +8,16 @@ final class AlbumIndexService
 {
     public function __construct(
         private readonly PhotoCatalogService $catalog,
-        private readonly string $defaultMediaBaseUrl,
-        private readonly string $localMediaBaseUrl = '',
-        private readonly ?MediaSourceAvailabilityService $mediaSourceAvailabilityService = null,
+        private readonly string $mediaBaseUrl,
     ) {
     }
 
     /**
      * @return list<array{id:string,name:string,coverUrl:string,photoCount:int,latestSortTime:string}>
      */
-    public function all(string $mediaSource = 'r2'): array
+    public function all(): array
     {
-        $mediaBaseUrl = $this->resolveMediaBaseUrl($mediaSource);
+        $mediaBaseUrl = $this->mediaBaseUrl;
         $albums = [];
 
         foreach ($this->catalog->all() as $photo) {
@@ -60,15 +58,6 @@ final class AlbumIndexService
         );
 
         return $items;
-    }
-
-    private function resolveMediaBaseUrl(string $mediaSource): string
-    {
-        if ($this->mediaSourceAvailabilityService !== null) {
-            return $this->mediaSourceAvailabilityService->resolveMediaBaseUrl($mediaSource);
-        }
-
-        return $mediaSource === 'local' ? $this->localMediaBaseUrl : $this->defaultMediaBaseUrl;
     }
 
     private function encodeRelativePath(string $relativePath): string

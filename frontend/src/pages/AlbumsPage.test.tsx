@@ -49,7 +49,7 @@ describe('AlbumsPage', () => {
       expect(screen.getByTestId('albums-grid')).toBeInTheDocument();
     });
 
-    expect(mockedFetchAlbums).toHaveBeenCalledWith('r2');
+    expect(mockedFetchAlbums).toHaveBeenCalledWith();
     expect(screen.getByRole('heading', { name: 'travel' })).toBeInTheDocument();
     expect(screen.getByText('3 photos')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'home' })).toBeInTheDocument();

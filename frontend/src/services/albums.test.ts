@@ -22,8 +22,8 @@ describe('fetchAlbums', () => {
 
     vi.stubGlobal('fetch', fetchMock);
 
-    await expect(fetchAlbums('r2')).resolves.toEqual([sampleAlbum]);
-    expect(fetchMock).toHaveBeenCalledWith('/api/albums?mediaSource=r2');
+    await expect(fetchAlbums()).resolves.toEqual([sampleAlbum]);
+    expect(fetchMock).toHaveBeenCalledWith('/api/albums');
   });
 
   it('throws on non-ok responses', async () => {
@@ -35,6 +35,6 @@ describe('fetchAlbums', () => {
       }),
     );
 
-    await expect(fetchAlbums('local')).rejects.toThrow('Request failed with status 500');
+    await expect(fetchAlbums()).rejects.toThrow('Request failed with status 500');
   });
 });

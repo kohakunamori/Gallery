@@ -17,9 +17,6 @@ export const UPLOAD_GENERIC_ERROR_MESSAGE = 'Upload failed. Please try again.';
 export const EXHIBITION_GENERIC_ERROR_MESSAGE =
   'Something went wrong while loading works. Check your connection and try again.';
 
-export const EXHIBITION_MEDIA_SOURCE_ERROR_MESSAGE =
-  'None of the media sources could be reached right now. Try again, or choose another source in settings.';
-
 export const EXHIBITION_STATUS_COPY = {
   error: {
     title: 'Unable to load the exhibition',
@@ -28,10 +25,6 @@ export const EXHIBITION_STATUS_COPY = {
   empty: {
     title: 'No works yet',
     description: 'The exhibition is ready. Upload the first images to start the wall.',
-  },
-  mediaSourceUnavailable: {
-    title: 'Media is temporarily unavailable',
-    description: EXHIBITION_MEDIA_SOURCE_ERROR_MESSAGE,
   },
 } as const;
 
@@ -42,8 +35,6 @@ const STACK_PATTERN =
 const NETWORK_PATTERN =
   /\bfailed to fetch\b|\bnetworkerror\b|\bnetwork request failed\b|\bload failed\b|\bfetch failed\b|\beconnrefused\b|\benotfound\b|\berr_network\b|\boffline\b/i;
 const TOKEN_PATTERN = /\b(?:token|unauthorized|unauthorised|forbidden|not authorized|authentication)\b/i;
-const MEDIA_SOURCE_PATTERN =
-  /no reachable remote media source|media source (?:is )?(?:unavailable|disabled|unreachable)|none of the (?:configured )?media sources/i;
 
 /**
  * Map HTTP status / raw service messages into short visitor-safe English copy.
@@ -56,10 +47,6 @@ export function mapUserFacingError(input: UserFacingErrorInput): string {
 
   if (isTokenFailure(status, message)) {
     return UPLOAD_TOKEN_ERROR_MESSAGE;
-  }
-
-  if (isMediaSourceFailure(message)) {
-    return EXHIBITION_MEDIA_SOURCE_ERROR_MESSAGE;
   }
 
   if (isNetworkFailure(message)) {
@@ -100,10 +87,6 @@ export function toUserFacingError(
   });
 }
 
-export function isMediaSourceFailureMessage(message: string | null | undefined): boolean {
-  return isMediaSourceFailure(normalizeMessage(message));
-}
-
 function isTokenFailure(status: number | undefined, message: string): boolean {
   if (status === 401) {
     return true;
@@ -115,10 +98,6 @@ function isTokenFailure(status: number | undefined, message: string): boolean {
   }
 
   return TOKEN_PATTERN.test(message);
-}
-
-function isMediaSourceFailure(message: string): boolean {
-  return MEDIA_SOURCE_PATTERN.test(message);
 }
 
 function isNetworkFailure(message: string): boolean {

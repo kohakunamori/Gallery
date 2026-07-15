@@ -5,9 +5,7 @@ declare(strict_types=1);
 namespace Gallery\Tests\Service;
 
 use Gallery\Service\AlbumIndexService;
-use Gallery\Service\MediaSourceAvailabilityService;
 use Gallery\Service\PhotoCatalogService;
-use Gallery\Service\QiniuUsageService;
 use PHPUnit\Framework\TestCase;
 
 final class AlbumIndexServiceTest extends TestCase
@@ -66,58 +64,6 @@ final class AlbumIndexServiceTest extends TestCase
         self::assertSame('2026-03-20T08:00:00+00:00', $items[0]['latestSortTime']);
         self::assertSame(1, $items[1]['photoCount']);
         self::assertSame('https://r2.example.com/gallery/family/pic.jpg', $items[1]['coverUrl']);
-
-        @unlink($catalogPath);
-    }
-
-    public function test_it_builds_qiniu_album_cover_urls_when_qiniu_is_available(): void
-    {
-        $catalogPath = $this->writeCatalog([
-            [
-                'path' => 'travel/cover.jpg',
-                'filename' => 'cover.jpg',
-                'takenAt' => null,
-                'sortTime' => '2026-03-31T09:00:00+00:00',
-                'width' => 1200,
-                'height' => 800,
-                'size' => 10,
-                'version' => 'cover',
-            ],
-        ]);
-
-        $qiniuUsageService = new QiniuUsageService(
-            'ak',
-            'sk',
-            'bucket',
-            'cdn.example.com',
-            'api.qiniuapi.com',
-            null,
-            900,
-            10 * 1024 * 1024 * 1024,
-            static fn (string $requestTarget, array $headers): string => json_encode([
-                [
-                    'values' => [
-                        'flow' => 1024,
-                    ],
-                ],
-            ], JSON_THROW_ON_ERROR),
-        );
-        $availabilityService = new MediaSourceAvailabilityService([
-            'r2' => 'https://r2.example.com/gallery',
-            'qiniu' => 'https://qiniu.example.com/gallery',
-            'local' => '',
-        ], $qiniuUsageService);
-
-        $service = new AlbumIndexService(
-            new PhotoCatalogService($catalogPath),
-            'https://r2.example.com/gallery',
-            '',
-            $availabilityService,
-        );
-
-        $items = $service->all('qiniu');
-
-        self::assertSame('https://qiniu.example.com/gallery/travel/cover.jpg', $items[0]['coverUrl']);
 
         @unlink($catalogPath);
     }

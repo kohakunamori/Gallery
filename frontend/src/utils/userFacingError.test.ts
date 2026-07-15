@@ -1,12 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   EXHIBITION_GENERIC_ERROR_MESSAGE,
-  EXHIBITION_MEDIA_SOURCE_ERROR_MESSAGE,
   EXHIBITION_STATUS_COPY,
   UPLOAD_GENERIC_ERROR_MESSAGE,
   UPLOAD_NETWORK_ERROR_MESSAGE,
   UPLOAD_TOKEN_ERROR_MESSAGE,
-  isMediaSourceFailureMessage,
   mapUserFacingError,
   toUserFacingError,
 } from './userFacingError';
@@ -34,16 +32,6 @@ describe('userFacingError', () => {
     expect(toUserFacingError(new TypeError('NetworkError when attempting to fetch resource.'), 'upload')).toBe(
       UPLOAD_NETWORK_ERROR_MESSAGE,
     );
-  });
-
-  it('maps media-source failures for exhibition copy', () => {
-    expect(
-      mapUserFacingError({
-        message: 'No reachable remote media source.',
-        context: 'exhibition',
-      }),
-    ).toBe(EXHIBITION_MEDIA_SOURCE_ERROR_MESSAGE);
-    expect(isMediaSourceFailureMessage('No reachable remote media source.')).toBe(true);
   });
 
   it('keeps short safe backend validation messages', () => {
@@ -87,7 +75,7 @@ describe('userFacingError', () => {
   it('exports stable exhibition status panel titles and descriptions', () => {
     expect(EXHIBITION_STATUS_COPY.error.title).toBe('Unable to load the exhibition');
     expect(EXHIBITION_STATUS_COPY.empty.title).toBe('No works yet');
-    expect(EXHIBITION_STATUS_COPY.mediaSourceUnavailable.title).toBe('Media is temporarily unavailable');
     expect(EXHIBITION_STATUS_COPY.empty.description).not.toMatch(/photos-index\.json|\/var\/|stack/i);
+    expect(EXHIBITION_STATUS_COPY).not.toHaveProperty('mediaSourceUnavailable');
   });
 });

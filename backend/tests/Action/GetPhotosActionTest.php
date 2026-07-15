@@ -67,35 +67,7 @@ final class GetPhotosActionTest extends TestCase
         $this->removeDirectory($cacheDir);
     }
 
-    public function testRejectsLocalMediaSourceWhenDisabled(): void
-    {
-        $catalogPath = $this->writeCatalog([
-            [
-                'path' => 'travel/cover.png',
-                'filename' => 'cover.png',
-                'takenAt' => null,
-                'sortTime' => '2026-03-31T09:00:00+00:00',
-                'width' => 319,
-                'height' => 512,
-                'size' => 100,
-                'version' => 'cover-version',
-            ],
-        ]);
-
-        $app = createApp($catalogPath, 'https://img.example.com', null, true, '');
-        $request = (new ServerRequestFactory())
-            ->createServerRequest('GET', '/api/photos?mediaSource=local');
-        $response = $app->handle($request);
-        $payload = json_decode((string) $response->getBody(), true, 512, JSON_THROW_ON_ERROR);
-
-        self::assertSame(409, $response->getStatusCode());
-        self::assertSame('Media source unavailable', $payload['error']);
-        self::assertSame('local', $payload['mediaSource']);
-
-        @unlink($catalogPath);
-    }
-
-    public function testRejectsQiniuMediaSourceWhenUnavailable(): void
+    public function testIgnoresStaleMediaSourceQueryParam(): void
     {
         $catalogPath = $this->writeCatalog([
             [
@@ -116,9 +88,42 @@ final class GetPhotosActionTest extends TestCase
         $response = $app->handle($request);
         $payload = json_decode((string) $response->getBody(), true, 512, JSON_THROW_ON_ERROR);
 
-        self::assertSame(409, $response->getStatusCode());
-        self::assertSame('Media source unavailable', $payload['error']);
-        self::assertSame('qiniu', $payload['mediaSource']);
+        self::assertSame(200, $response->getStatusCode());
+        self::assertStringStartsWith('https://img.example.com/', $payload['items'][0]['url']);
+        self::assertArrayNotHasKey('error', $payload);
+
+        @unlink($catalogPath);
+    }
+
+    public function testReturnsNotModifiedWhenEtagMatches(): void
+    {
+        $catalogPath = $this->writeCatalog([
+            [
+                'path' => 'travel/cover.png',
+                'filename' => 'cover.png',
+                'takenAt' => null,
+                'sortTime' => '2026-03-31T09:00:00+00:00',
+                'width' => 319,
+                'height' => 512,
+                'size' => 100,
+                'version' => 'cover-version',
+            ],
+        ]);
+
+        $app = createApp($catalogPath, 'https://img.example.com');
+        $first = $app->handle((new ServerRequestFactory())->createServerRequest('GET', '/api/photos'));
+        $etag = $first->getHeaderLine('ETag');
+
+        $second = $app->handle(
+            (new ServerRequestFactory())
+                ->createServerRequest('GET', '/api/photos')
+                ->withHeader('If-None-Match', $etag),
+        );
+
+        self::assertSame(200, $first->getStatusCode());
+        self::assertSame(304, $second->getStatusCode());
+        self::assertSame($etag, $second->getHeaderLine('ETag'));
+        self::assertSame('public, max-age=15, stale-while-revalidate=60', $second->getHeaderLine('Cache-Control'));
 
         @unlink($catalogPath);
     }

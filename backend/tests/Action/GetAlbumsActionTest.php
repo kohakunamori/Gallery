@@ -50,7 +50,7 @@ final class GetAlbumsActionTest extends TestCase
         @unlink($catalogPath);
     }
 
-    public function test_it_rejects_local_album_media_source_when_disabled(): void
+    public function test_it_ignores_stale_media_source_query_param(): void
     {
         $catalogPath = $this->writeCatalog([
             [
@@ -65,14 +65,14 @@ final class GetAlbumsActionTest extends TestCase
             ],
         ]);
 
-        $app = createApp($catalogPath, 'https://img.example.com', null, false, '');
+        $app = createApp($catalogPath, 'https://img.example.com');
         $request = (new ServerRequestFactory())->createServerRequest('GET', '/api/albums?mediaSource=local');
         $response = $app->handle($request);
         $payload = json_decode((string) $response->getBody(), true, 512, JSON_THROW_ON_ERROR);
 
-        self::assertSame(409, $response->getStatusCode());
-        self::assertSame('Media source unavailable', $payload['error']);
-        self::assertSame('local', $payload['mediaSource']);
+        self::assertSame(200, $response->getStatusCode());
+        self::assertSame('https://img.example.com/travel/cover.jpg', $payload['items'][0]['coverUrl']);
+        self::assertArrayNotHasKey('error', $payload);
 
         @unlink($catalogPath);
     }

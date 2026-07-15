@@ -8,11 +8,9 @@ final class PhotoIndexService
 {
     public function __construct(
         private readonly PhotoCatalogService $catalog,
-        private readonly string $defaultMediaBaseUrl,
+        private readonly string $mediaBaseUrl,
         private readonly ?PhotoCacheInterface $cache = null,
         private readonly int $cacheTtlSeconds = 15,
-        private readonly string $localMediaBaseUrl = '',
-        private readonly ?MediaSourceAvailabilityService $mediaSourceAvailabilityService = null,
         private readonly string $catalogIdentity = '',
     ) {
     }
@@ -20,9 +18,9 @@ final class PhotoIndexService
     /**
      * @return list<array{id:string,filename:string,url:string,thumbnailUrl:string,takenAt:?string,sortTime:string,width:?int,height:?int}>
      */
-    public function all(string $mediaSource = 'r2'): array
+    public function all(): array
     {
-        $mediaBaseUrl = $this->resolveMediaBaseUrl($mediaSource);
+        $mediaBaseUrl = $this->mediaBaseUrl;
         $cacheKey = sha1($this->catalogCacheIdentity() . '|' . $mediaBaseUrl);
 
         if ($this->cache !== null) {
@@ -80,15 +78,6 @@ final class PhotoIndexService
         $size = $stat['size'] ?? 0;
 
         return $this->catalogIdentity . '|' . (string) $mtime . '|' . (string) $size;
-    }
-
-    private function resolveMediaBaseUrl(string $mediaSource): string
-    {
-        if ($this->mediaSourceAvailabilityService !== null) {
-            return $this->mediaSourceAvailabilityService->resolveMediaBaseUrl($mediaSource);
-        }
-
-        return $mediaSource === 'local' ? $this->localMediaBaseUrl : $this->defaultMediaBaseUrl;
     }
 
     private function buildVersionedMediaUrl(string $mediaBaseUrl, string $relativePath, string $version): string

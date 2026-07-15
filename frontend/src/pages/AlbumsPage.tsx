@@ -18,7 +18,7 @@ export function AlbumsPage() {
 
     setStatus('loading');
 
-    fetchAlbums('r2')
+    fetchAlbums()
       .then((items) => {
         if (controller.signal.aborted) {
           return;

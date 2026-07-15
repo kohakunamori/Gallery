@@ -2,7 +2,7 @@
 
 A lightweight personal photo exhibition: React frontend + Slim PHP API, with **images on object storage (Cloudflare R2 by default)** and a **JSON catalog** as the source of truth.
 
-- Waterfall gallery, month groups, lightbox, settings (columns / sort / media source)
+- Waterfall gallery, month groups, lightbox, settings (columns / sort / theme)
 - Web upload page and offline CLI uploader
 - Docker / GHCR one-command deploy
 
@@ -148,9 +148,8 @@ See [docs/DEPLOY.md](docs/DEPLOY.md) § “Migrate images already on R2”.
 | Method | Path | Notes |
 | --- | --- | --- |
 | `GET` | `/health` | liveness |
-| `GET` | `/api/photos` | photo feed from catalog + media base URL |
+| `GET` | `/api/photos` | photo feed from catalog + R2 media base URL |
 | `GET` | `/api/albums` | albums grouped by path prefix |
-| `GET` | `/api/media-sources` | which media sources are configured |
 | `POST` | `/upload` | multipart upload (optional bearer/token) |
 
 ## Project layout

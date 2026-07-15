@@ -44,7 +44,6 @@ const DEFAULT_VIEWPORT_WIDTH = 1280;
 const TOP_VISIBILITY_THRESHOLD = 24;
 const DOWNWARD_HIDE_THRESHOLD = 64;
 const UPWARD_REVEAL_THRESHOLD = 96;
-const FIXED_MEDIA_SOURCE = 'r2' as const;
 
 function getViewportWidth() {
   return typeof window === 'undefined' ? DEFAULT_VIEWPORT_WIDTH : window.innerWidth;
@@ -135,7 +134,7 @@ export function ExhibitionPage() {
 
     const loadPhotos = async () => {
       try {
-        const items = await fetchPhotos(FIXED_MEDIA_SOURCE, controller.signal);
+        const items = await fetchPhotos(controller.signal);
 
         if (controller.signal.aborted) {
           return;
@@ -173,8 +172,6 @@ export function ExhibitionPage() {
     writeGallerySettings({
       columnPreference,
       sortPreference,
-      // Production gallery only serves R2; keep storage shape but pin the value.
-      mediaSourcePreference: FIXED_MEDIA_SOURCE,
     });
   }, [columnPreference, sortPreference]);
 

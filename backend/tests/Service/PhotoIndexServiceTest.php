@@ -5,10 +5,8 @@ declare(strict_types=1);
 namespace Gallery\Tests\Service;
 
 use Gallery\Service\FilePhotoCache;
-use Gallery\Service\MediaSourceAvailabilityService;
 use Gallery\Service\PhotoCatalogService;
 use Gallery\Service\PhotoIndexService;
-use Gallery\Service\QiniuUsageService;
 use PHPUnit\Framework\TestCase;
 
 final class PhotoIndexServiceTest extends TestCase
@@ -84,8 +82,6 @@ final class PhotoIndexServiceTest extends TestCase
             'https://r2.example.com/gallery',
             new FilePhotoCache($cacheDirectory),
             30,
-            '',
-            null,
             $catalogPath,
         );
 
@@ -121,8 +117,6 @@ final class PhotoIndexServiceTest extends TestCase
             'https://r2.example.com/gallery',
             new FilePhotoCache($cacheDirectory),
             300,
-            '',
-            null,
             $catalogPath,
         );
 
@@ -159,61 +153,6 @@ final class PhotoIndexServiceTest extends TestCase
 
         @unlink($catalogPath);
         $this->removeDirectory($cacheDirectory);
-    }
-
-    public function test_it_builds_qiniu_media_urls_when_qiniu_is_available(): void
-    {
-        $catalogPath = $this->writeCatalog([
-            [
-                'path' => 'travel/beach day.jpg',
-                'filename' => 'beach day.jpg',
-                'takenAt' => null,
-                'sortTime' => '2026-03-31T12:00:00+00:00',
-                'width' => 1200,
-                'height' => 800,
-                'size' => 12,
-                'version' => 'qiniu-version',
-            ],
-        ]);
-
-        $qiniuUsageService = new QiniuUsageService(
-            'ak',
-            'sk',
-            'bucket',
-            'cdn.example.com',
-            'api.qiniuapi.com',
-            null,
-            900,
-            10 * 1024 * 1024 * 1024,
-            static fn (string $requestTarget, array $headers): string => json_encode([
-                [
-                    'values' => [
-                        'flow' => 1024,
-                    ],
-                ],
-            ], JSON_THROW_ON_ERROR),
-        );
-        $availabilityService = new MediaSourceAvailabilityService([
-            'r2' => 'https://r2.example.com/gallery',
-            'qiniu' => 'https://qiniu.example.com/gallery',
-            'local' => '',
-        ], $qiniuUsageService);
-        $service = new PhotoIndexService(
-            new PhotoCatalogService($catalogPath),
-            'https://r2.example.com/gallery',
-            null,
-            15,
-            '',
-            $availabilityService,
-            $catalogPath,
-        );
-
-        $items = $service->all('qiniu');
-
-        self::assertSame('https://qiniu.example.com/gallery/travel/beach%20day.jpg?v=qiniu-version', $items[0]['url']);
-        self::assertSame('https://qiniu.example.com/gallery/travel/beach%20day.jpg?v=qiniu-version', $items[0]['thumbnailUrl']);
-
-        @unlink($catalogPath);
     }
 
     /**

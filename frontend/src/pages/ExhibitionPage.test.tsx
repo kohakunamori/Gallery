@@ -330,7 +330,7 @@ describe('ExhibitionPage', () => {
     render(<ExhibitionPage />);
 
     await screen.findByRole('button', { name: 'Open late-afternoon.jpg' });
-    expect(mockedFetchPhotos).toHaveBeenNthCalledWith(1, 'r2', expect.any(AbortSignal));
+    expect(mockedFetchPhotos).toHaveBeenNthCalledWith(1, expect.any(AbortSignal));
     expect(screen.getAllByTestId(/waterfall-gallery/)[0]).toHaveAttribute('data-column-count', '6');
   });
 
@@ -346,7 +346,6 @@ describe('ExhibitionPage', () => {
     expect(JSON.parse(window.localStorage.getItem(GALLERY_SETTINGS_STORAGE_KEY) ?? '{}')).toEqual({
       columnPreference: 5,
       sortPreference: 'random',
-      mediaSourcePreference: 'r2',
     });
   });
 
@@ -363,7 +362,7 @@ describe('ExhibitionPage', () => {
     render(<ExhibitionPage />);
 
     await screen.findByRole('button', { name: 'Open late-afternoon.jpg' });
-    expect(mockedFetchPhotos).toHaveBeenNthCalledWith(1, 'r2', expect.any(AbortSignal));
+    expect(mockedFetchPhotos).toHaveBeenNthCalledWith(1, expect.any(AbortSignal));
     expect(screen.getAllByTestId(/waterfall-gallery/)[0]).toHaveAttribute('data-column-count', '8');
   });
 
@@ -381,7 +380,7 @@ describe('ExhibitionPage', () => {
     render(<ExhibitionPage />);
 
     await screen.findByRole('button', { name: 'Open late-afternoon.jpg' });
-    expect(mockedFetchPhotos).toHaveBeenNthCalledWith(1, 'r2', expect.any(AbortSignal));
+    expect(mockedFetchPhotos).toHaveBeenNthCalledWith(1, expect.any(AbortSignal));
     expect(screen.getAllByTestId(/waterfall-gallery/)[0]).toHaveAttribute('data-column-count', '5');
   });
 

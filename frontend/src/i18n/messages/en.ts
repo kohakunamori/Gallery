@@ -36,17 +36,12 @@ export const enMessages = {
   'settings.description':
     'Choose how many columns the waterfall uses while keeping the presentation stable.',
   'settings.sortOrder': 'Sort order',
-  'settings.mediaSource': 'Media source',
   'settings.waterfallColumns': 'Waterfall columns',
   'settings.sort.newest': 'Newest first',
   'settings.sort.oldest': 'Oldest first',
   'settings.sort.filenameAsc': 'Filename A–Z',
   'settings.sort.filenameDesc': 'Filename Z–A',
   'settings.sort.random': 'Random order',
-  'settings.media.auto': 'Auto',
-  'settings.media.r2': 'R2',
-  'settings.media.qiniu': 'Qiniu',
-  'settings.media.local': 'Server local',
   'settings.columns.auto': 'Auto',
   'settings.columns.fixed': 'Fixed columns',
   'settings.columns.fixedHint': 'Choose a fixed count from {min} to {max}.',
@@ -55,13 +50,6 @@ export const enMessages = {
   'settings.columns.selectedCount': 'Selected waterfall column count',
   'settings.columns.autoHint':
     'Auto still follows the current responsive breakpoints. Use the stepper to switch to a fixed layout.',
-  'settings.qiniu.traffic': 'Qiniu monthly traffic',
-  'settings.qiniu.trafficUsage': 'Qiniu monthly traffic usage',
-  'settings.qiniu.autoHint':
-    'Auto uses the default remote fallback order. Server local stays manual only.',
-  'settings.qiniu.available': 'Qiniu is available.',
-  'settings.qiniu.unavailable': 'Qiniu is unavailable.',
-  'settings.qiniu.usageText': '{used} of {quota} GB used',
 
   // Upload page
   'upload.backToGallery': 'Back to gallery',

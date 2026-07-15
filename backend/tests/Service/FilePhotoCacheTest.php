@@ -16,9 +16,7 @@ final class FilePhotoCacheTest extends TestCase
         $cacheDirectory = $this->createTempDirectory('gallery-photo-cache-');
         $cache = new FilePhotoCache($cacheDirectory);
         $cache->put('photos:r2', [['id' => 'stale']], 300);
-        $qiniuCachePath = $cacheDirectory . '/qiniu-usage.json';
         $otherJsonPath = $cacheDirectory . '/settings.json';
-        file_put_contents($qiniuCachePath, '{}');
         file_put_contents($otherJsonPath, '{}');
 
         try {
@@ -27,7 +25,6 @@ final class FilePhotoCacheTest extends TestCase
             $cache->clear();
 
             self::assertNull($cache->get('photos:r2'));
-            self::assertFileExists($qiniuCachePath);
             self::assertFileExists($otherJsonPath);
         } finally {
             $this->removeDirectory($cacheDirectory);

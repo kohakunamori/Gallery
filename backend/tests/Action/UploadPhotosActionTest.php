@@ -50,12 +50,6 @@ final class UploadPhotosActionTest extends TestCase
                 '/media',
                 null,
                 true,
-                '/media',
-                null,
-                null,
-                null,
-                null,
-                null,
                 null,
                 null,
                 null,
@@ -87,12 +81,6 @@ final class UploadPhotosActionTest extends TestCase
                 '/media',
                 null,
                 true,
-                '/media',
-                null,
-                null,
-                null,
-                null,
-                null,
                 $scriptPath,
                 PHP_BINARY,
                 null,
@@ -140,8 +128,8 @@ final class UploadPhotosActionTest extends TestCase
         $cacheDirectory = $this->createTempDirectory('gallery-upload-action-cache-');
         $cache = new FilePhotoCache($cacheDirectory);
         $cache->put('photos:r2', [['id' => 'stale']], 300);
-        $qiniuUsageCache = $cacheDirectory . '/qiniu-usage.json';
-        file_put_contents($qiniuUsageCache, '{}');
+        $unrelatedJson = $cacheDirectory . '/settings.json';
+        file_put_contents($unrelatedJson, '{}');
 
         $scriptDirectory = $this->createTempDirectory('gallery-upload-action-script-');
         $scriptPath = $scriptDirectory . '/upload_r2.php';
@@ -153,12 +141,6 @@ final class UploadPhotosActionTest extends TestCase
                 '/media',
                 $cache,
                 true,
-                '/media',
-                null,
-                null,
-                null,
-                null,
-                null,
                 $scriptPath,
                 PHP_BINARY,
             );
@@ -184,7 +166,7 @@ final class UploadPhotosActionTest extends TestCase
             self::assertFileDoesNotExist(sys_get_temp_dir() . '/' . $events[0]['file']['path']);
             self::assertSame(['stub upload ok'], $completeEvent['output']);
             self::assertNull($cache->get('photos:r2'));
-            self::assertFileExists($qiniuUsageCache);
+            self::assertFileExists($unrelatedJson);
             $catalog = json_decode((string) file_get_contents($catalogPath), true, 512, JSON_THROW_ON_ERROR);
             self::assertCount(1, $catalog['items']);
             self::assertSame($completeEvent['files'][0]['path'], $catalog['items'][0]['path']);
@@ -208,12 +190,6 @@ final class UploadPhotosActionTest extends TestCase
                 '/media',
                 null,
                 true,
-                '/media',
-                null,
-                null,
-                null,
-                null,
-                null,
                 $scriptPath,
                 PHP_BINARY,
             );
@@ -255,12 +231,6 @@ final class UploadPhotosActionTest extends TestCase
                 '/media',
                 $cache,
                 true,
-                '/media',
-                null,
-                null,
-                null,
-                null,
-                null,
                 $scriptPath,
                 PHP_BINARY,
             );
@@ -301,12 +271,6 @@ final class UploadPhotosActionTest extends TestCase
                 '/media',
                 null,
                 true,
-                '/media',
-                null,
-                null,
-                null,
-                null,
-                null,
                 $scriptPath,
                 PHP_BINARY,
             );

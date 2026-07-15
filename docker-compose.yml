@@ -11,11 +11,6 @@ services:
       UPLOAD_TEMPORARY_DIRECTORY: /var/www/gallery/backend/var/upload-batches
       UPLOAD_SCRIPT_ENV_FILE: ${UPLOAD_SCRIPT_ENV_FILE:-/run/secrets/upload_r2.env}
       UPLOAD_ACCESS_TOKEN: ${UPLOAD_ACCESS_TOKEN:-}
-      QINIU_MEDIA_BASE_URL: ${QINIU_MEDIA_BASE_URL:-}
-      QINIU_ACCESS_KEY: ${QINIU_ACCESS_KEY:-}
-      QINIU_SECRET_KEY: ${QINIU_SECRET_KEY:-}
-      QINIU_BUCKET: ${QINIU_BUCKET:-}
-      QINIU_DOMAIN: ${QINIU_DOMAIN:-}
     volumes:
       # Host-managed catalog + cache + temp batches (easy to edit/replace photos-index.json).
       - ${GALLERY_DATA_HOST_PATH:-./data/gallery}:/var/www/gallery/backend/var

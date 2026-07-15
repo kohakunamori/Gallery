@@ -21,7 +21,6 @@ import {
 import { sortPhotos } from '../utils/sortPhotos';
 
 const DEFAULT_VIEWPORT_WIDTH = 1280;
-const FIXED_MEDIA_SOURCE = 'r2' as const;
 
 type AlbumDetailPageProps = {
   albumId: string;
@@ -58,8 +57,8 @@ export function AlbumDetailPage({ albumId }: AlbumDetailPageProps) {
     const load = async () => {
       try {
         const [albumItems, photoItems] = await Promise.all([
-          fetchAlbums(FIXED_MEDIA_SOURCE).catch(() => [] as Album[]),
-          fetchPhotos(FIXED_MEDIA_SOURCE, controller.signal),
+          fetchAlbums().catch(() => [] as Album[]),
+          fetchPhotos(controller.signal),
         ]);
 
         if (controller.signal.aborted) {
@@ -195,7 +194,7 @@ export function AlbumDetailPage({ albumId }: AlbumDetailPageProps) {
             <ExhibitionStatusPanel
               variant="empty"
               title="No photos in this album"
-              description="This album has no matching works for the current media source."
+              description="This album has no matching works."
               primaryHref={{ label: 'Browse albums', href: '/albums' }}
               secondaryHref={{ label: 'Back to gallery', href: '/' }}
             />

@@ -34,14 +34,6 @@ return [
     'mediaBaseUrl' => $readOptionalEnv('MEDIA_BASE_URL') ?? 'https://static.cf.nyaneko.cn/gallery',
     'cacheDirectory' => $backendDirectory . '/var/cache',
     'displayErrorDetails' => false,
-    'localMediaBaseUrl' => '',
-    'qiniu' => [
-        'mediaBaseUrl' => $readOptionalEnv('QINIU_MEDIA_BASE_URL'),
-        'accessKey' => $readOptionalEnv('QINIU_ACCESS_KEY'),
-        'secretKey' => $readOptionalEnv('QINIU_SECRET_KEY'),
-        'bucket' => $readOptionalEnv('QINIU_BUCKET'),
-        'domain' => $readOptionalEnv('QINIU_DOMAIN'),
-    ],
     'upload' => [
         'scriptEnvFile' => $readOptionalEnv('UPLOAD_SCRIPT_ENV_FILE'),
         'temporaryDirectory' => $readOptionalEnv('UPLOAD_TEMPORARY_DIRECTORY') ?? $backendDirectory . '/var/upload-batches',

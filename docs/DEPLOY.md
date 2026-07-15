@@ -110,7 +110,6 @@ docker compose up -d
 | `UPLOAD_SCRIPT_ENV_FILE` | backend | Path inside container to `upload_r2.env` (compose mounts it) |
 | `UPLOAD_ENV_HOST_PATH` | compose host | Host path of the env file mounted into backend |
 | `GALLERY_DATA_HOST_PATH` | compose host | Host dir mounted to backend `var/` (holds `photos-index.json`) |
-| `QINIU_*` | backend | Optional Qiniu media source |
 | `GALLERY_HTTP_PORT` | compose | Host port for frontend (default `8088`) |
 | `BACKEND_IMAGE` / `FRONTEND_IMAGE` | compose | Override image tags |
 

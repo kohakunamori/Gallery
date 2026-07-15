@@ -24,7 +24,6 @@ const REQUIRED_KEYS: MessageKey[] = [
   'settings.closeAria',
   'settings.display',
   'settings.sortOrder',
-  'settings.mediaSource',
   'settings.waterfallColumns',
   'upload.backToGallery',
   'upload.heading',
