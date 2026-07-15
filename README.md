@@ -11,8 +11,9 @@ A lightweight personal photo exhibition: React frontend + Slim PHP API, with **i
 ```text
 Browser
   └─ frontend (nginx SPA)
-       ├─ /api/* , /upload  →  backend (Slim PHP)
-       └─ image URLs        →  R2 / CDN  (MEDIA_BASE_URL)
+       ├─ /api/* , POST /upload  →  backend (Slim PHP)
+       ├─ GET /upload            →  SPA upload page
+       └─ image URLs             →  R2 / CDN  (MEDIA_BASE_URL)
 
 Catalog (host file, mounted into backend):
   ${GALLERY_DATA_HOST_PATH}/photos-index.json
