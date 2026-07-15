@@ -160,7 +160,8 @@ export const WaterfallCard = memo(function WaterfallCard({
   const [displayedThumbnailUrl, setDisplayedThumbnailUrl] = useState<string | null>(() => getInitialDisplayedThumbnailUrl(photo));
   const cardRef = useRef<HTMLDivElement | null>(null);
   const [shouldRenderImage, setShouldRenderImage] = useState(false);
-  const isLoaded = displayedThumbnailUrl !== null;
+  const [hasError, setHasError] = useState(false);
+  const isLoaded = displayedThumbnailUrl !== null && !hasError;
   const imageUrl = displayedThumbnailUrl ?? photo.thumbnailUrl;
 
   useEffect(() => {
@@ -171,6 +172,7 @@ export const WaterfallCard = memo(function WaterfallCard({
 
   useEffect(() => {
     setDisplayedThumbnailUrl(getInitialDisplayedThumbnailUrl(photo));
+    setHasError(false);
   }, [photo]);
 
   useEffect(() => {
@@ -246,8 +248,13 @@ export const WaterfallCard = memo(function WaterfallCard({
       className="group block w-full overflow-hidden rounded-xl bg-surface-container-low text-left shadow-[0_10px_28px_rgba(15,23,42,0.05)] transition-transform duration-500 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
     >
       <div ref={cardRef} className="relative overflow-hidden" data-testid="waterfall-card-frame" style={{ aspectRatio }}>
-        <div className="absolute inset-0 bg-surface-container-low transition-opacity duration-700 ease-out group-hover:opacity-60" />
-        {shouldRenderImage && (
+        <div
+          className={`absolute inset-0 transition-opacity duration-700 ease-out group-hover:opacity-60 ${
+            isLoaded || hasError ? 'bg-surface-container-low' : 'gallery-shimmer'
+          }`}
+          data-testid="waterfall-card-placeholder"
+        />
+        {shouldRenderImage && !hasError && (
           <img
             src={imageUrl}
             alt={photo.filename}
@@ -257,18 +264,30 @@ export const WaterfallCard = memo(function WaterfallCard({
             width={photo.width ?? undefined}
             height={photo.height ?? undefined}
             onLoad={() => {
+              setHasError(false);
               markPhotoImageAsLoaded(photo.id, imageUrl);
               setDisplayedThumbnailUrl(imageUrl);
             }}
             onError={() => {
               if (imageUrl !== photo.thumbnailUrl) {
                 setDisplayedThumbnailUrl(photo.thumbnailUrl);
+                return;
               }
+
+              setHasError(true);
             }}
             className={`block h-full w-full object-cover transition-[opacity,transform] duration-700 ease-out ${
               isLoaded ? 'opacity-100 saturate-100 group-hover:scale-[1.02]' : 'scale-[1.015] opacity-0 saturate-75'
             }`}
           />
+        )}
+        {hasError && (
+          <div
+            className="absolute inset-0 flex items-center justify-center bg-surface-container-low/90"
+            data-testid="waterfall-card-error"
+          >
+            <span className="text-[10px] font-medium uppercase tracking-[0.22em] text-on-surface-variant">Unavailable</span>
+          </div>
         )}
         <div
           className={`absolute inset-0 bg-gradient-to-t from-black/20 via-black/0 to-transparent transition-opacity duration-500 ${

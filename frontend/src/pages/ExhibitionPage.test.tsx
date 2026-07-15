@@ -734,20 +734,80 @@ describe('ExhibitionPage', () => {
     expect(screen.getByRole('dialog', { name: 'Image lightbox' })).toBeInTheDocument();
   });
 
-  it('shows an empty message when no photos are returned', async () => {
+  it('shows a loading skeleton before photos resolve', async () => {
+    window.localStorage.setItem(
+      GALLERY_SETTINGS_STORAGE_KEY,
+      JSON.stringify({
+        columnPreference: 'auto',
+        sortPreference: 'newest',
+        mediaSourcePreference: 'r2',
+      }),
+    );
+
+    let resolvePhotos: (value: typeof photos) => void = () => undefined;
+    mockedFetchPhotos.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvePhotos = resolve;
+        }),
+    );
+
+    render(<ExhibitionPage />);
+
+    const skeleton = await screen.findByTestId('exhibition-skeleton');
+    expect(skeleton).toBeInTheDocument();
+    expect(skeleton).toHaveAttribute('data-column-count', '4');
+    expect(screen.getAllByTestId('exhibition-skeleton-card').length).toBeGreaterThan(1);
+    expect(screen.getByTestId('exhibition-hero-meta')).toHaveTextContent('Loading works…');
+    expect(screen.getByLabelText('Loading exhibition')).toHaveAttribute('aria-busy', 'true');
+
+    resolvePhotos(photos);
+
+    expect(await screen.findByRole('button', { name: 'Open late-afternoon.jpg' })).toBeInTheDocument();
+    expect(screen.queryByTestId('exhibition-skeleton')).not.toBeInTheDocument();
+    expect(screen.getByTestId('exhibition-hero-meta')).toHaveTextContent(/3 works · \d+ months?/);
+  });
+
+  it('shows an empty status panel when no photos are returned', async () => {
+    window.localStorage.setItem(
+      GALLERY_SETTINGS_STORAGE_KEY,
+      JSON.stringify({
+        columnPreference: 'auto',
+        sortPreference: 'newest',
+        mediaSourcePreference: 'r2',
+      }),
+    );
     mockedFetchPhotos.mockResolvedValue([]);
 
     render(<ExhibitionPage />);
 
-    expect(await screen.findByText('No works are available yet.')).toBeInTheDocument();
+    expect(await screen.findByTestId('exhibition-status-empty')).toBeInTheDocument();
+    expect(screen.getByText('No works yet')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Upload first images' })).toHaveAttribute('href', '/upload');
   });
 
-  it('shows an error message when the request fails', async () => {
-    mockedFetchPhotos.mockRejectedValue(new Error('boom'));
+  it('shows an error panel with retry that refetches photos', async () => {
+    const user = userEvent.setup();
+    window.localStorage.setItem(
+      GALLERY_SETTINGS_STORAGE_KEY,
+      JSON.stringify({
+        columnPreference: 'auto',
+        sortPreference: 'newest',
+        mediaSourcePreference: 'r2',
+      }),
+    );
+    mockedFetchPhotos.mockRejectedValueOnce(new Error('boom')).mockResolvedValueOnce(photos);
 
     render(<ExhibitionPage />);
 
-    expect(await screen.findByText('Unable to load the exhibition right now.')).toBeInTheDocument();
+    expect(await screen.findByTestId('exhibition-status-error')).toBeInTheDocument();
+    expect(screen.getByText('Unable to load the exhibition')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open upload' })).toHaveAttribute('href', '/upload');
+
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+
+    expect(await screen.findByRole('button', { name: 'Open late-afternoon.jpg' })).toBeInTheDocument();
+    expect(mockedFetchPhotos).toHaveBeenCalledTimes(2);
   });
 
   it('aborts the previous request when the media source changes', async () => {
@@ -787,7 +847,7 @@ describe('ExhibitionPage', () => {
     view.unmount();
 
     await waitFor(() => {
-      expect(screen.queryByText('Unable to load the exhibition right now.')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('exhibition-status-error')).not.toBeInTheDocument();
     });
   });
 

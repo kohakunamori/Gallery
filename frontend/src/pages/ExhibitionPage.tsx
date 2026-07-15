@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ExhibitionHeader } from '../components/exhibition/ExhibitionHeader';
 import { ExhibitionHero } from '../components/exhibition/ExhibitionHero';
 import { ExhibitionSection } from '../components/exhibition/ExhibitionSection';
+import { ExhibitionSkeleton } from '../components/exhibition/ExhibitionSkeleton';
+import { ExhibitionStatusPanel } from '../components/exhibition/ExhibitionStatusPanel';
 import {
   getInitialVisibleCount,
   getLoadMoreCount,
@@ -160,6 +162,7 @@ export function ExhibitionPage() {
   );
   const [mediaSourceStatuses, setMediaSourceStatuses] = useState<MediaSourceStatus[]>([]);
   const [hasLoadedMediaSourceStatuses, setHasLoadedMediaSourceStatuses] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
   const previousScrollYRef = useRef(0);
   const upwardRevealDistanceRef = useRef(0);
   const downwardHideDistanceRef = useRef(0);
@@ -298,6 +301,7 @@ export function ExhibitionPage() {
     mediaSourcePreference,
     (mediaSourcePreference === 'auto' || mediaSourcePreference === 'qiniu') ? hasLoadedMediaSourceStatuses : false,
     mediaSourcePreference === 'auto' ? autoMediaSourceStatusSignature : '',
+    reloadKey,
   ]);
 
   useEffect(() => {
@@ -373,6 +377,10 @@ export function ExhibitionPage() {
     setIsSettingsOpen(false);
   }, []);
 
+  const retryLoad = useCallback(() => {
+    setReloadKey((current) => current + 1);
+  }, []);
+
   const selectPhotoAtIndex = useCallback((index: number) => {
     const nextPhoto = sortedPhotos[index];
 
@@ -388,12 +396,31 @@ export function ExhibitionPage() {
     <>
       <ExhibitionHeader isAtTop={isAtTop} isVisible={isHeaderVisible} onOpenSettings={openSettings} />
       <main className="min-h-screen bg-surface text-on-surface">
-        <ExhibitionHero />
+        <ExhibitionHero
+          status={status}
+          photoCount={sortedPhotos.length}
+          monthCount={allGroups.length}
+        />
 
         <section className="mx-auto max-w-[2400px] px-4 pb-24 md:px-6 lg:px-12">
-          {status === 'loading' && <p className="text-sm text-on-surface-variant">Loading exhibition…</p>}
-          {status === 'error' && <p className="text-sm text-red-700">Unable to load the exhibition right now.</p>}
-          {status === 'empty' && <p className="text-sm text-on-surface-variant">No works are available yet.</p>}
+          {status === 'loading' && <ExhibitionSkeleton columnPreference={columnPreference} />}
+          {status === 'error' && (
+            <ExhibitionStatusPanel
+              variant="error"
+              title="Unable to load the exhibition"
+              description="Something went wrong while fetching works. Check your connection and try again."
+              primaryAction={{ label: 'Retry', onClick: retryLoad }}
+              secondaryHref={{ label: 'Open upload', href: '/upload' }}
+            />
+          )}
+          {status === 'empty' && (
+            <ExhibitionStatusPanel
+              variant="empty"
+              title="No works yet"
+              description="The exhibition is ready. Upload the first images to start the wall."
+              primaryHref={{ label: 'Upload first images', href: '/upload' }}
+            />
+          )}
           {status === 'ready' && (
             <div>
               {groups.map((group) => (

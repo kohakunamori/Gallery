@@ -104,10 +104,26 @@ describe('WaterfallCard', () => {
     const image = screen.getByRole('img', { name: 'one.jpg' });
 
     expect(image).toHaveClass('opacity-0');
+    expect(screen.getByTestId('waterfall-card-placeholder').className).toContain('gallery-shimmer');
 
     fireEvent.load(image);
 
     expect(image).toHaveClass('opacity-100');
+    expect(screen.getByTestId('waterfall-card-placeholder').className).not.toContain('gallery-shimmer');
+  });
+
+  it('shows an unavailable affordance when the thumbnail fails to load', () => {
+    render(<WaterfallCard photo={photo} onOpen={vi.fn()} />);
+
+    act(() => {
+      MockIntersectionObserver.instances[0]?.trigger(true);
+    });
+
+    fireEvent.error(screen.getByRole('img', { name: 'one.jpg' }));
+
+    expect(screen.getByTestId('waterfall-card-error')).toHaveTextContent('Unavailable');
+    expect(screen.queryByRole('img', { name: 'one.jpg' })).not.toBeInTheDocument();
+    expect(screen.getByTestId('waterfall-card-placeholder').className).not.toContain('gallery-shimmer');
   });
 
   it('keeps a visible thumbnail swap hidden until the new image loads', () => {
