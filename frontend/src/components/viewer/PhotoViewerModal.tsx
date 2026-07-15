@@ -55,6 +55,24 @@ function resolvePhotoImageUrl(photo: Photo) {
   return getCachedPhotoImageUrl(photo.id) ?? photo.url;
 }
 
+function ZoomInIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.75">
+      <circle cx="11" cy="11" r="6.5" />
+      <path strokeLinecap="round" d="M16 16l4 4M11 8v6M8 11h6" />
+    </svg>
+  );
+}
+
+function ZoomOutIcon() {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.75">
+      <circle cx="11" cy="11" r="6.5" />
+      <path strokeLinecap="round" d="M16 16l4 4M8 11h6" />
+    </svg>
+  );
+}
+
 export function PhotoViewerModal({ photos, selectedIndex, onSelectIndex, onClose }: PhotoViewerModalProps) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -67,6 +85,7 @@ export function PhotoViewerModal({ photos, selectedIndex, onSelectIndex, onClose
   const [loadedPhotoId, setLoadedPhotoId] = useState<string | null>(null);
   const [heldImage, setHeldImage] = useState<HeldImage | null>(null);
   const [loadGeneration, setLoadGeneration] = useState(0);
+  const [zoomed, setZoomed] = useState(false);
 
   useEffect(() => {
     if (photo === undefined) {
@@ -77,6 +96,7 @@ export function PhotoViewerModal({ photos, selectedIndex, onSelectIndex, onClose
     setDisplayedImageUrl(resolvePhotoImageUrl(photo));
     setImageStatus('loading');
     setLoadedPhotoId(null);
+    setZoomed(false);
   }, [photo?.id, photo?.url]);
 
   useEffect(() => {
@@ -84,15 +104,11 @@ export function PhotoViewerModal({ photos, selectedIndex, onSelectIndex, onClose
       return;
     }
 
-    const previousPhoto = photos[selectedIndex - 1];
-    const nextPhoto = photos[selectedIndex + 1];
-
-    if (previousPhoto !== undefined) {
-      preloadPhotoImage(previousPhoto.id, previousPhoto.url);
-    }
-
-    if (nextPhoto !== undefined) {
-      preloadPhotoImage(nextPhoto.id, nextPhoto.url);
+    for (const offset of [-2, -1, 1, 2]) {
+      const neighbor = photos[selectedIndex + offset];
+      if (neighbor !== undefined) {
+        preloadPhotoImage(neighbor.id, neighbor.url);
+      }
     }
   }, [loadedPhotoId, photo, photos, selectedIndex]);
 
@@ -129,6 +145,22 @@ export function PhotoViewerModal({ photos, selectedIndex, onSelectIndex, onClose
     }
   };
 
+  const selectFirstPhoto = () => {
+    if (!isFirstPhoto) {
+      onSelectIndex(0);
+    }
+  };
+
+  const selectLastPhoto = () => {
+    if (!isLastPhoto) {
+      onSelectIndex(photos.length - 1);
+    }
+  };
+
+  const toggleZoom = () => {
+    setZoomed((current) => !current);
+  };
+
   const handleBackdropClick = (event: ReactMouseEvent<HTMLDivElement>) => {
     if (event.target === event.currentTarget) {
       onClose();
@@ -159,6 +191,22 @@ export function PhotoViewerModal({ photos, selectedIndex, onSelectIndex, onClose
       if (!isLastPhoto) {
         event.preventDefault();
         selectNextPhoto();
+      }
+      return;
+    }
+
+    if (event.key === 'Home') {
+      if (!isFirstPhoto) {
+        event.preventDefault();
+        selectFirstPhoto();
+      }
+      return;
+    }
+
+    if (event.key === 'End') {
+      if (!isLastPhoto) {
+        event.preventDefault();
+        selectLastPhoto();
       }
     }
   };
@@ -262,6 +310,16 @@ export function PhotoViewerModal({ photos, selectedIndex, onSelectIndex, onClose
 
       <button
         type="button"
+        aria-label={zoomed ? 'Zoom out' : 'Zoom in'}
+        onClick={toggleZoom}
+        className={`${GLASS_ICON_BUTTON_CLASS} right-16 top-4 md:right-20 md:top-8`}
+        data-testid="lightbox-zoom"
+      >
+        {zoomed ? <ZoomOutIcon /> : <ZoomInIcon />}
+      </button>
+
+      <button
+        type="button"
         aria-label="Previous image"
         disabled={isFirstPhoto}
         onClick={selectPreviousPhoto}
@@ -279,7 +337,9 @@ export function PhotoViewerModal({ photos, selectedIndex, onSelectIndex, onClose
         data-testid="lightbox-content"
       >
         <div
-          className="relative flex max-h-[80vh] max-w-full items-center justify-center"
+          className={`relative flex max-h-[80vh] max-w-full items-center justify-center ${
+            zoomed ? 'overflow-auto' : 'overflow-hidden'
+          }`}
           style={
             photo.width && photo.height
               ? { aspectRatio: `${photo.width} / ${photo.height}`, width: 'min(100%, 72rem)' }
@@ -323,9 +383,10 @@ export function PhotoViewerModal({ photos, selectedIndex, onSelectIndex, onClose
               decoding="async"
               width={photo.width ?? undefined}
               height={photo.height ?? undefined}
-              className={`viewer-photo-fade max-h-[80vh] max-w-full object-contain transition-opacity duration-200 ease-out motion-reduce:transition-none ${
-                imageIsVisible ? 'opacity-100' : showHeldImage ? 'absolute inset-0 m-auto opacity-0' : 'opacity-0'
-              }`}
+              className={`viewer-photo-fade max-h-[80vh] max-w-full origin-center object-contain transition-opacity duration-200 ease-out motion-reduce:transition-none ${
+                zoomed ? 'scale-150' : 'scale-100'
+              } ${imageIsVisible ? 'opacity-100' : showHeldImage ? 'absolute inset-0 m-auto opacity-0' : 'opacity-0'}`}
+              onDoubleClick={toggleZoom}
               onLoad={() => {
                 handleImageLoad(photo.id, displayedImageUrl);
               }}

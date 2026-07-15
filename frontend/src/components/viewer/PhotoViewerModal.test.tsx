@@ -457,4 +457,187 @@ describe('PhotoViewerModal', () => {
     expect(image.className).toContain('transition-opacity');
     expect(image.className).toContain('motion-reduce:transition-none');
   });
+
+  it('navigates to the first and last image with Home and End keys', async () => {
+    const user = userEvent.setup();
+    const onSelectIndex = vi.fn();
+    const photosWithThree = [
+      ...photos,
+      {
+        id: 'three',
+        filename: 'three.jpg',
+        url: '/media/three.jpg',
+        thumbnailUrl: '/media/three.jpg',
+        takenAt: '2026-03-29T09:00:00+00:00',
+        sortTime: '2026-03-29T09:00:00+00:00',
+        width: 1200,
+        height: 800,
+      },
+    ];
+
+    const { rerender } = render(
+      <PhotoViewerModal
+        photos={photosWithThree}
+        selectedIndex={1}
+        onSelectIndex={onSelectIndex}
+        onClose={vi.fn()}
+      />,
+    );
+
+    await user.keyboard('{Home}');
+    expect(onSelectIndex).toHaveBeenCalledWith(0);
+
+    rerender(
+      <PhotoViewerModal
+        photos={photosWithThree}
+        selectedIndex={1}
+        onSelectIndex={onSelectIndex}
+        onClose={vi.fn()}
+      />,
+    );
+
+    onSelectIndex.mockClear();
+    await user.keyboard('{End}');
+    expect(onSelectIndex).toHaveBeenCalledWith(2);
+  });
+
+  it('toggles zoom via the zoom button aria and scale class', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <PhotoViewerModal
+        photos={photos}
+        selectedIndex={0}
+        onSelectIndex={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const zoomButton = screen.getByRole('button', { name: 'Zoom in' });
+    const image = screen.getByRole('img', { name: 'one.jpg' });
+    const frame = screen.getByTestId('lightbox-image-frame');
+
+    expect(image).toHaveClass('scale-100');
+    expect(image).not.toHaveClass('scale-150');
+    expect(frame.className).toContain('overflow-hidden');
+
+    await user.click(zoomButton);
+
+    expect(screen.getByRole('button', { name: 'Zoom out' })).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'one.jpg' })).toHaveClass('scale-150');
+    expect(screen.getByTestId('lightbox-image-frame').className).toContain('overflow-auto');
+
+    await user.click(screen.getByRole('button', { name: 'Zoom out' }));
+
+    expect(screen.getByRole('button', { name: 'Zoom in' })).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'one.jpg' })).toHaveClass('scale-100');
+  });
+
+  it('toggles zoom when the image is double-clicked', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <PhotoViewerModal
+        photos={photos}
+        selectedIndex={0}
+        onSelectIndex={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const image = screen.getByRole('img', { name: 'one.jpg' });
+
+    expect(image).toHaveClass('scale-100');
+
+    await user.dblClick(image);
+
+    expect(screen.getByRole('img', { name: 'one.jpg' })).toHaveClass('scale-150');
+    expect(screen.getByRole('button', { name: 'Zoom out' })).toBeInTheDocument();
+
+    await user.dblClick(screen.getByRole('img', { name: 'one.jpg' }));
+
+    expect(screen.getByRole('img', { name: 'one.jpg' })).toHaveClass('scale-100');
+    expect(screen.getByRole('button', { name: 'Zoom in' })).toBeInTheDocument();
+  });
+
+  it('resets zoom when the selected photo changes', async () => {
+    const user = userEvent.setup();
+
+    const { rerender } = render(
+      <PhotoViewerModal
+        photos={photos}
+        selectedIndex={0}
+        onSelectIndex={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Zoom in' }));
+    expect(screen.getByRole('img', { name: 'one.jpg' })).toHaveClass('scale-150');
+
+    rerender(
+      <PhotoViewerModal
+        photos={photos}
+        selectedIndex={1}
+        onSelectIndex={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('img', { name: 'two.jpg' })).toHaveClass('scale-100');
+    expect(screen.getByRole('button', { name: 'Zoom in' })).toBeInTheDocument();
+  });
+
+  it('preloads neighbors within two steps after the current image loads', () => {
+    const preloadSpy = vi.spyOn(WaterfallCardModule, 'preloadPhotoImage').mockImplementation(() => {});
+    const photosWithFive = [
+      ...photos,
+      {
+        id: 'three',
+        filename: 'three.jpg',
+        url: '/media/three.jpg',
+        thumbnailUrl: '/media/three.jpg',
+        takenAt: '2026-03-29T09:00:00+00:00',
+        sortTime: '2026-03-29T09:00:00+00:00',
+        width: 1200,
+        height: 800,
+      },
+      {
+        id: 'four',
+        filename: 'four.jpg',
+        url: '/media/four.jpg',
+        thumbnailUrl: '/media/four.jpg',
+        takenAt: '2026-03-28T09:00:00+00:00',
+        sortTime: '2026-03-28T09:00:00+00:00',
+        width: 1200,
+        height: 800,
+      },
+      {
+        id: 'five',
+        filename: 'five.jpg',
+        url: '/media/five.jpg',
+        thumbnailUrl: '/media/five.jpg',
+        takenAt: '2026-03-27T09:00:00+00:00',
+        sortTime: '2026-03-27T09:00:00+00:00',
+        width: 1200,
+        height: 800,
+      },
+    ];
+
+    render(
+      <PhotoViewerModal
+        photos={photosWithFive}
+        selectedIndex={2}
+        onSelectIndex={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    fireEvent.load(screen.getByRole('img', { name: 'three.jpg' }));
+
+    expect(preloadSpy).toHaveBeenCalledWith('one', '/media/one.jpg');
+    expect(preloadSpy).toHaveBeenCalledWith('two', '/media/two.jpg');
+    expect(preloadSpy).toHaveBeenCalledWith('four', '/media/four.jpg');
+    expect(preloadSpy).toHaveBeenCalledWith('five', '/media/five.jpg');
+  });
 });
