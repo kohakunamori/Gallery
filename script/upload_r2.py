@@ -10,7 +10,6 @@ import mimetypes
 import os
 from pathlib import Path, PurePosixPath
 import paramiko
-import qiniu
 import shutil
 import socks
 import subprocess
@@ -48,12 +47,6 @@ DEFAULT_SORT_TIME_MODE = SORT_TIME_MODE_UPLOAD
 AVIF_CONVERTIBLE_EXTS = {'.jpg', '.jpeg', '.png', '.webp', '.bmp', '.tiff'}
 AVIF_OUTPUT_SUFFIX = '.avif'
 EXISTENCE_CHECK_MAX_WORKERS = 16
-QINIU_EXISTENCE_CHECK_MAX_WORKERS = 4
-QINIU_STAT_RETRY_STATUS_CODES = {502}
-QINIU_STAT_MAX_ATTEMPTS = 3
-# Gallery catalog is JSON-backed and media is served from R2; Linux local mediaSource is retired.
-EXISTING_PHOTOS_API_URL = 'https://aigc.nyaneko.cn/api/photos?mediaSource=r2'
-LINUX_EXISTING_PHOTOS_API_URL = EXISTING_PHOTOS_API_URL
 PHOTO_CATALOG_ENV = 'PHOTO_CATALOG_PATH'
 PHOTO_CATALOG_REMOTE_ENV = 'PHOTO_CATALOG_REMOTE_PATH'
 DISCARD_PREPARED_CACHE_ENV = 'UPLOAD_DISCARD_PREPARED_CACHE'
@@ -96,17 +89,13 @@ class UploadRuntimeConfig:
     region: str
     endpoint: str
     r2_proxy: str | None
+    # Catalog SSH only (not image upload)
     linux_host: str | None
     linux_user: str | None
-    linux_dir: str | None
     linux_key: str | None
     linux_password: str | None
     linux_port: int
     linux_proxy: str | None
-    qiniu_bucket: str
-    qiniu_prefix: str
-    qiniu_access_key: str | None
-    qiniu_secret_key: str | None
     access_key: str | None
     secret_key: str | None
     compression: str = COMPATIBILITY_COMPRESSION_MODE
@@ -630,18 +619,20 @@ def record_prepared_png_metadata(
 
 
 def normalize_target(target: str) -> str:
-    return 'all' if target == 'both' else target
+    """Images upload to R2 only. Accept legacy default/backend value 'r2'."""
+    value = (target or 'r2').strip().lower()
+    if value != 'r2':
+        raise ValueError(
+            f"不支持的上传目标 {target!r}：图片仅上传到 R2。"
+            " Linux SSH 仅用于远程合并 photos-index.json（--catalog-remote）。"
+        )
+    return 'r2'
 
 
-def targets_for_mode(target: str) -> tuple[str, ...]:
-    normalized_target = normalize_target(target)
-    if normalized_target == 'r2':
-        return ('r2',)
-    if normalized_target == 'linux':
-        return ('linux',)
-    if normalized_target == 'qiniu':
-        return ('qiniu',)
-    return ('r2', 'linux', 'qiniu')
+def targets_for_mode(target: str | None = None) -> tuple[str, ...]:
+    if target is not None:
+        normalize_target(target)
+    return ('r2',)
 
 
 def build_local_file_fingerprint(
@@ -790,14 +781,6 @@ def build_r2_cache_key(bucket: str, object_key: str) -> str:
     return f'{bucket}|{object_key}'
 
 
-def build_qiniu_cache_key(bucket: str, object_key: str) -> str:
-    return f'{bucket}|{object_key}'
-
-
-def build_linux_cache_key(host: str, remote_path: str) -> str:
-    return f'{host}|{remote_path}'
-
-
 def get_cached_existing_targets(
     files: list[Path],
     *,
@@ -901,169 +884,13 @@ def get_cached_existing_r2_keys(
     )
 
 
-def get_cached_existing_linux_paths(
-    files: list[Path],
-    *,
-    base_dir: Path,
-    remote_dir: str,
-    host: str,
-    cache_data: dict,
-    compression: str | None = COMPATIBILITY_COMPRESSION_MODE,
-) -> set[str]:
-    return get_cached_existing_targets_from_index(
-        files,
-        cache_data=cache_data,
-        base_dir=base_dir,
-        target_label='linux',
-        remote_id_builder=lambda path: build_effective_linux_remote_path(path, base_dir=base_dir, remote_dir=remote_dir, compression=compression),
-        target_id_builder=lambda remote_path: build_linux_cache_key(host, remote_path),
-        semantics_builder=lambda path: get_expected_upload_cache_semantics(path, compression),
-    )
-
-
-def extract_existing_photo_filename(item: dict) -> str | None:
-    filename = item.get('filename')
-    if isinstance(filename, str) and filename:
-        return filename
-
-    for key in ('url', 'thumbnailUrl'):
-        value = item.get(key)
-        if not isinstance(value, str) or not value:
-            continue
-        path = parse.urlparse(value).path
-        name = PurePosixPath(path).name
-        if name:
-            return parse.unquote(name)
-    return None
-
-
-def list_existing_linux_filenames(api_url: str = EXISTING_PHOTOS_API_URL) -> tuple[set[str], str | None]:
-    """Return basenames already published in the gallery catalog/API.
-
-    Historically used for Linux skip-checks against mediaSource=local. The gallery
-    now serves only remote R2 URLs from JSON, so this defaults to mediaSource=r2.
-    """
-    from urllib import request
-
-    existing_filenames: set[str] = set()
-    try:
-        with request.urlopen(api_url) as response:
-            payload = response.read()
-        data = json.loads(payload.decode('utf-8'))
-        items = data.get('items', [])
-        if not isinstance(items, list):
-            return existing_filenames, 'invalid existing photos payload: items is not a list'
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            filename = extract_existing_photo_filename(item)
-            if filename:
-                existing_filenames.add(filename)
-        return existing_filenames, None
-    except Exception as exc:
-        return existing_filenames, str(exc)
-
-
-def has_unique_basenames(files: list[Path]) -> bool:
-    basenames = [path.name for path in files]
-    return len(basenames) == len(set(basenames))
-
-
-def precheck_pending_linux_items(
-    items: list[PlannedUpload],
-    *,
-    base_dir: Path,
-    config: UploadRuntimeConfig,
-) -> tuple[set[str], list[tuple[Path, tuple[str, str, bool, str | None]]], int]:
-    existing_paths: set[str] = set()
-    skip_results: list[tuple[Path, tuple[str, str, bool, str | None]]] = []
-    confirmed = 0
-    filename_hits: set[str] = set()
-
-    if items and has_unique_basenames([Path(item.relative_path) for item in items]):
-        filename_hits, filename_error = list_existing_linux_filenames(EXISTING_PHOTOS_API_URL)
-        if filename_error:
-            raise RuntimeError(filename_error)
-
-    for item in items:
-        path = item.source_path
-        remote_path = build_linux_remote_path(
-            path,
-            base_dir=base_dir,
-            remote_dir=config.linux_dir or '',
-            compression_strategy=item.compression_strategy,
-        )
-        upload_name = Path(item.relative_path).name
-        if upload_name in filename_hits:
-            message = f'跳过 {path.name} -> {(config.linux_user or "")}@{(config.linux_host or "")}:{remote_path}'
-            existing_paths.add(remote_path)
-            skip_results.append((path, ('skipped', message, item.compressed, item.compression_strategy)))
-            confirmed += 1
-            continue
-
-        remote_skip_kwargs = {
-            'base_dir': base_dir,
-            'remote_dir': config.linux_dir or '',
-            'host': config.linux_host or '',
-            'user': config.linux_user or '',
-            'ssh_key': config.linux_key,
-            'password': config.linux_password,
-            'port': config.linux_port,
-            'proxy_url': config.linux_proxy,
-        }
-        if is_avif_compression_strategy(item.compression_strategy):
-            remote_skip_kwargs['compression_strategy'] = item.compression_strategy
-        remote_skip_result = check_linux_remote_skip_result(path, **remote_skip_kwargs)
-        if remote_skip_result is None:
-            continue
-
-        status, message = remote_skip_result
-        if status != 'skipped':
-            raise RuntimeError(message)
-        existing_paths.add(remote_path)
-        skip_results.append((path, ('skipped', message, item.compressed, item.compression_strategy)))
-        confirmed += 1
-
-    return existing_paths, skip_results, confirmed
-
-
-def get_cached_existing_qiniu_keys(
-    files: list[Path],
-    *,
-    base_dir: Path,
-    bucket: str,
-    prefix: str,
-    cache_data: dict,
-    compression: str | None = COMPATIBILITY_COMPRESSION_MODE,
-) -> set[str]:
-    return get_cached_existing_targets_from_index(
-        files,
-        cache_data=cache_data,
-        base_dir=base_dir,
-        target_label='qiniu',
-        remote_id_builder=lambda path: build_effective_object_key(path, base_dir=base_dir, prefix=prefix, compression=compression),
-        target_id_builder=lambda object_key: build_qiniu_cache_key(bucket, object_key),
-        semantics_builder=lambda path: get_expected_upload_cache_semantics(path, compression),
-    )
-
-
 def get_target_cache_id(target_label: str, path: Path, *, base_dir: Path, config: UploadRuntimeConfig) -> str:
-    if target_label == 'r2':
-        return build_r2_cache_key(
-            config.bucket,
-            build_effective_object_key(path, base_dir=base_dir, prefix=config.prefix.strip('/'), compression=config.compression),
-        )
-    if target_label == 'linux':
-        return build_linux_cache_key(
-            config.linux_host or '',
-            build_effective_linux_remote_path(path, base_dir=base_dir, remote_dir=config.linux_dir or '', compression=config.compression),
-        )
-    if target_label == 'qiniu':
-        return build_qiniu_cache_key(
-            config.qiniu_bucket,
-            build_effective_object_key(path, base_dir=base_dir, prefix=config.qiniu_prefix.strip('/'), compression=config.compression),
-        )
-    raise ValueError(f'Unsupported target label: {target_label}')
+    if target_label != 'r2':
+        raise ValueError(f'Unsupported target label: {target_label}')
+    return build_r2_cache_key(
+        config.bucket,
+        build_effective_object_key(path, base_dir=base_dir, prefix=config.prefix.strip('/'), compression=config.compression),
+    )
 
 
 def is_target_synced(
@@ -1211,52 +1038,6 @@ def update_r2_cache_entry(
         path,
         base_dir=base_dir,
         target_label='r2',
-        target_id=target_id,
-        status='uploaded',
-        compressed=compressed,
-        compression_strategy=compression_strategy,
-    )
-
-
-def update_linux_cache_entry(
-    cache_data: dict,
-    *,
-    base_dir: Path,
-    host: str,
-    remote_path: str,
-    path: Path,
-    compressed: bool,
-    compression_strategy: str | None,
-) -> bool:
-    target_id = build_linux_cache_key(host, remote_path)
-    return apply_target_result_to_cache(
-        cache_data,
-        path,
-        base_dir=base_dir,
-        target_label='linux',
-        target_id=target_id,
-        status='uploaded',
-        compressed=compressed,
-        compression_strategy=compression_strategy,
-    )
-
-
-def update_qiniu_cache_entry(
-    cache_data: dict,
-    *,
-    base_dir: Path,
-    bucket: str,
-    object_key: str,
-    path: Path,
-    compressed: bool,
-    compression_strategy: str | None,
-) -> bool:
-    target_id = build_qiniu_cache_key(bucket, object_key)
-    return apply_target_result_to_cache(
-        cache_data,
-        path,
-        base_dir=base_dir,
-        target_label='qiniu',
         target_id=target_id,
         status='uploaded',
         compressed=compressed,
@@ -1557,7 +1338,7 @@ def build_effective_object_key(path: Path, *, base_dir: Path, prefix: str, compr
 
 
 def resolve_runtime_config(args) -> UploadRuntimeConfig:
-    target = normalize_target(args.target)
+    target = normalize_target(getattr(args, 'target', None) or 'r2')
     compression = normalize_compression_mode(getattr(args, 'compression', None) or env_first('UPLOAD_COMPRESSION'))
     bucket = getattr(args, 'bucket', None) or env_first('R2_BUCKET') or DEFAULT_BUCKET
     prefix_arg = getattr(args, 'prefix', None)
@@ -1571,9 +1352,9 @@ def resolve_runtime_config(args) -> UploadRuntimeConfig:
 
     r2_proxy = getattr(args, 'r2_proxy', None) or env_first('R2_PROXY')
 
+    # SSH credentials only for remote catalog merge (not image upload).
     linux_host = getattr(args, 'linux_host', None) or env_first('LINUX_UPLOAD_HOST')
     linux_user = getattr(args, 'linux_user', None) or env_first('LINUX_UPLOAD_USER')
-    linux_dir = getattr(args, 'linux_dir', None) or env_first('LINUX_UPLOAD_DIR')
     linux_key = getattr(args, 'linux_key', None)
     linux_password_arg = getattr(args, 'linux_password', None)
     if linux_key is None and linux_password_arg is None:
@@ -1581,12 +1362,6 @@ def resolve_runtime_config(args) -> UploadRuntimeConfig:
     linux_password = linux_password_arg or env_first('LINUX_UPLOAD_PASSWORD')
     linux_port = getattr(args, 'linux_port', None) or int(env_first('LINUX_UPLOAD_PORT') or '22')
     linux_proxy = getattr(args, 'linux_proxy', None) or env_first('LINUX_PROXY')
-
-    qiniu_bucket = getattr(args, 'qiniu_bucket', None) or env_first('QINIU_BUCKET') or bucket
-    qiniu_prefix_arg = getattr(args, 'qiniu_prefix', None)
-    qiniu_prefix = qiniu_prefix_arg if qiniu_prefix_arg is not None else (env_first('QINIU_PREFIX') or prefix)
-    qiniu_access_key = env_first('QINIU_ACCESS_KEY')
-    qiniu_secret_key = env_first('QINIU_SECRET_KEY')
 
     return UploadRuntimeConfig(
         target=target,
@@ -1597,15 +1372,10 @@ def resolve_runtime_config(args) -> UploadRuntimeConfig:
         r2_proxy=r2_proxy,
         linux_host=linux_host,
         linux_user=linux_user,
-        linux_dir=linux_dir,
         linux_key=linux_key,
         linux_password=linux_password,
         linux_port=linux_port,
         linux_proxy=linux_proxy,
-        qiniu_bucket=qiniu_bucket,
-        qiniu_prefix=qiniu_prefix,
-        qiniu_access_key=qiniu_access_key,
-        qiniu_secret_key=qiniu_secret_key,
         access_key=access_key,
         secret_key=secret_key,
         compression=compression,
@@ -1664,52 +1434,6 @@ def list_existing_keys(
                 key = item.get('Key')
                 if key:
                     existing_keys.add(key)
-        return existing_keys, None
-    except Exception as exc:
-        return existing_keys, str(exc)
-
-
-def list_existing_qiniu_keys(
-    bucket: str,
-    object_keys: list[str],
-    access_key: str,
-    secret_key: str,
-) -> tuple[set[str], str | None]:
-    existing_keys: set[str] = set()
-
-    try:
-        auth = qiniu.Auth(access_key, secret_key)
-        bucket_manager = qiniu.BucketManager(auth)
-        max_workers = max(1, min(QINIU_EXISTENCE_CHECK_MAX_WORKERS, len(object_keys)))
-
-        def check_one(object_key: str) -> tuple[str, bool]:
-            last_detail = '未知七牛状态检查错误'
-            for _ in range(QINIU_STAT_MAX_ATTEMPTS):
-                _, info = bucket_manager.stat(bucket, object_key)
-                status_code = getattr(info, 'status_code', None)
-                if status_code == 612:
-                    return object_key, False
-                if info is not None and info.ok():
-                    return object_key, True
-                detail = getattr(info, 'text_body', None) or getattr(info, 'error', None) or str(info)
-                if not detail or detail == 'None':
-                    detail = str(info)
-                if not detail or detail == 'None':
-                    detail = '未知七牛状态检查错误'
-                last_detail = detail
-                if status_code not in QINIU_STAT_RETRY_STATUS_CODES:
-                    break
-            raise RuntimeError(f'{object_key}: {last_detail}')
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
-            future_to_key = {
-                pool.submit(check_one, object_key): object_key
-                for object_key in object_keys
-            }
-            for future in concurrent.futures.as_completed(future_to_key):
-                object_key, found = future.result()
-                if found:
-                    existing_keys.add(object_key)
         return existing_keys, None
     except Exception as exc:
         return existing_keys, str(exc)
@@ -1854,7 +1578,6 @@ def get_source_mtime_metadata_value(source_path: Path) -> str:
     return str(source_path.stat().st_mtime)
 
 
-
 def upload_to_r2(
     source_path: Path,
     *,
@@ -1905,52 +1628,6 @@ def upload_to_r2(
         return 'failed', f'失败 {source_path.name}：{exc}'
 
 
-def upload_to_qiniu(
-    source_path: Path,
-    *,
-    upload_path: Path | None = None,
-    base_dir: Path,
-    bucket: str,
-    prefix: str,
-    access_key: str,
-    secret_key: str,
-    dry_run: bool,
-    skip_existing: bool,
-    existing_keys: set[str] | None,
-    compression_strategy: str | None = None,
-    auth=None,
-) -> tuple[str, str]:
-    upload_path = upload_path or source_path
-    key = build_object_key(source_path, base_dir=base_dir, prefix=prefix, compression_strategy=compression_strategy)
-
-    if dry_run:
-        return 'dry-run', f'演练 {source_path.name} -> qiniu://{bucket}/{key}'
-
-    if skip_existing and existing_keys is not None and key in existing_keys:
-        return 'skipped', f'跳过 {source_path.name} -> qiniu://{bucket}/{key}'
-
-    try:
-        auth = auth or qiniu.Auth(access_key, secret_key)
-        token = auth.upload_token(bucket, key, 3600)
-        ret, info = qiniu.put_file_v2(
-            token,
-            key,
-            str(upload_path),
-            version='v2',
-            params={'x-qn-meta-source-mtime': get_source_mtime_metadata_value(source_path)},
-        )
-        if info is not None and info.ok():
-            return 'uploaded', f'已上传 {source_path.name} -> qiniu://{bucket}/{key}'
-        detail = getattr(info, 'text_body', None) or getattr(info, 'error', None) or str(info)
-        if not detail or detail == 'None':
-            detail = str(ret)
-        if not detail or detail == 'None':
-            detail = '未知七牛上传错误'
-        return 'failed', f'失败 {source_path.name}：{detail}'
-    except Exception as exc:
-        return 'failed', f'失败 {source_path.name}：{exc}'
-
-
 def should_replace_remote_png(path: Path, compression_strategy: str | None) -> bool:
     return path.suffix.lower() == '.png' and is_avif_compression_strategy(compression_strategy)
 
@@ -1991,83 +1668,6 @@ def delete_replaced_png_from_r2(
         return 'failed', f'旧 PNG 替换失败 {path.name}：{exc}'
 
 
-def format_qiniu_error(info, ret=None, *, default: str) -> str:
-    detail = getattr(info, 'text_body', None) or getattr(info, 'error', None) or str(info)
-    if not detail or detail == 'None':
-        detail = str(ret)
-    if not detail or detail == 'None':
-        detail = default
-    return detail
-
-
-def delete_replaced_png_from_qiniu(
-    path: Path,
-    *,
-    base_dir: Path,
-    config: UploadRuntimeConfig,
-) -> tuple[str, str]:
-    old_key = build_object_key(path, base_dir=base_dir, prefix=config.qiniu_prefix.strip('/'))
-    avif_key = build_object_key(
-        path,
-        base_dir=base_dir,
-        prefix=config.qiniu_prefix.strip('/'),
-        compression_strategy=AVIF_LOSSLESS_COMPRESSION_STRATEGY,
-    )
-    try:
-        auth = qiniu.Auth(config.qiniu_access_key or '', config.qiniu_secret_key or '')
-        bucket_manager = qiniu.BucketManager(auth)
-        _, avif_info = bucket_manager.stat(config.qiniu_bucket, avif_key)
-        if getattr(avif_info, 'status_code', None) == 612 or avif_info is None or not avif_info.ok():
-            detail = format_qiniu_error(avif_info, default='未确认 AVIF 存在')
-            return 'failed', f'旧 PNG 替换失败 {path.name}：{detail}'
-        ret, delete_info = bucket_manager.delete(config.qiniu_bucket, old_key)
-        if delete_info is not None and delete_info.ok():
-            return 'deleted', f'已删除旧 PNG {path.name} -> qiniu://{config.qiniu_bucket}/{old_key}'
-        if getattr(delete_info, 'status_code', None) == 612:
-            return 'skipped', f'旧 PNG 不存在 {path.name} -> qiniu://{config.qiniu_bucket}/{old_key}'
-        detail = format_qiniu_error(delete_info, ret, default='未知七牛删除错误')
-        return 'failed', f'旧 PNG 替换失败 {path.name}：{detail}'
-    except Exception as exc:
-        return 'failed', f'旧 PNG 替换失败 {path.name}：{exc}'
-
-
-def delete_replaced_png_from_linux(
-    path: Path,
-    *,
-    base_dir: Path,
-    config: UploadRuntimeConfig,
-) -> tuple[str, str]:
-    old_path = build_linux_remote_path(path, base_dir=base_dir, remote_dir=config.linux_dir or '')
-    avif_path = build_linux_remote_path(
-        path,
-        base_dir=base_dir,
-        remote_dir=config.linux_dir or '',
-        compression_strategy=AVIF_LOSSLESS_COMPRESSION_STRATEGY,
-    )
-    target = f'{config.linux_user or ""}@{config.linux_host or ""}'
-    try:
-        client, sftp = open_linux_sftp_client(
-            host=config.linux_host or '',
-            user=config.linux_user or '',
-            ssh_key=config.linux_key,
-            password=config.linux_password,
-            port=config.linux_port,
-            proxy_url=config.linux_proxy,
-        )
-        try:
-            if not linux_sftp_path_exists(sftp, avif_path):
-                return 'failed', f'旧 PNG 替换失败 {path.name}：未确认 AVIF 存在 {target}:{avif_path}'
-            try:
-                sftp.remove(old_path)
-            except FileNotFoundError:
-                return 'skipped', f'旧 PNG 不存在 {path.name} -> {target}:{old_path}'
-            return 'deleted', f'已删除旧 PNG {path.name} -> {target}:{old_path}'
-        finally:
-            close_linux_sftp_session(client, sftp)
-    except Exception as exc:
-        return 'failed', f'旧 PNG 替换失败 {path.name}：{exc}'
-
-
 def delete_replaced_remote_png(
     target_label: str,
     path: Path,
@@ -2075,45 +1675,9 @@ def delete_replaced_remote_png(
     base_dir: Path,
     config: UploadRuntimeConfig,
 ) -> tuple[str, str]:
-    if target_label == 'r2':
-        return delete_replaced_png_from_r2(path, base_dir=base_dir, config=config)
-    if target_label == 'linux':
-        return delete_replaced_png_from_linux(path, base_dir=base_dir, config=config)
-    if target_label == 'qiniu':
-        return delete_replaced_png_from_qiniu(path, base_dir=base_dir, config=config)
-    return 'failed', f'旧 PNG 替换失败 {path.name}：不支持的目标 {target_label}'
-
-
-def build_linux_remote_path(
-    path: Path,
-    *,
-    base_dir: Path,
-    remote_dir: str,
-    compression_strategy: str | None = None,
-) -> str:
-    remote_root = PurePosixPath((remote_dir.rstrip('/') or '/'))
-    relative_parts = PurePosixPath(build_upload_relative_path(
-        path,
-        base_dir=base_dir,
-        compression_strategy=compression_strategy,
-    )).parts
-    if str(remote_root) == '/':
-        remote_path = PurePosixPath('/')
-    else:
-        remote_path = remote_root
-    for part in relative_parts:
-        remote_path /= part
-    return remote_path.as_posix()
-
-
-def build_effective_linux_remote_path(path: Path, *, base_dir: Path, remote_dir: str, compression: str | None) -> str:
-    _, compression_strategy = get_expected_upload_cache_semantics(path, compression)
-    return build_linux_remote_path(
-        path,
-        base_dir=base_dir,
-        remote_dir=remote_dir,
-        compression_strategy=compression_strategy,
-    )
+    if target_label != 'r2':
+        return 'failed', f'旧 PNG 替换失败 {path.name}：不支持的目标 {target_label}'
+    return delete_replaced_png_from_r2(path, base_dir=base_dir, config=config)
 
 
 def linux_sftp_path_exists(sftp: paramiko.SFTPClient, remote_path: str) -> bool:
@@ -2131,31 +1695,6 @@ def ensure_linux_remote_dirs_sftp(sftp: paramiko.SFTPClient, remote_path: str) -
         current_path = current.as_posix()
         if not linux_sftp_path_exists(sftp, current_path):
             sftp.mkdir(current_path)
-
-
-def set_linux_remote_mtime(sftp: paramiko.SFTPClient, *, source_path: Path, remote_path: str) -> None:
-    mtime = source_path.stat().st_mtime
-    sftp.utime(remote_path, (mtime, mtime))
-
-
-def set_linux_remote_mtime_via_ssh(
-    *,
-    source_path: Path,
-    remote_path: str,
-    target: str,
-    ssh_key: str | None,
-    port: int,
-) -> None:
-    mtime = source_path.stat().st_mtime
-    ssh_cmd = [
-        'ssh', '-i', ssh_key or '',
-        '-p', str(port),
-        '-o', 'BatchMode=yes',
-        '-o', 'StrictHostKeyChecking=accept-new',
-        target,
-        f'touch -m -d @{mtime} -- {remote_path}',
-    ]
-    subprocess.run(ssh_cmd, check=True, capture_output=True, **SUBPROCESS_TEXT_KWARGS)
 
 
 def build_linux_proxy_sock(proxy_url: str, *, host: str, port: int):
@@ -2282,519 +1821,8 @@ def is_linux_sftp_connection_error(exc: Exception) -> bool:
     return False
 
 
-def upload_file_via_sftp(
-    sftp: paramiko.SFTPClient,
-    *,
-    source_path: Path,
-    upload_path: Path,
-    remote_path: str,
-) -> None:
-    sftp.put(str(upload_path), remote_path)
-    set_linux_remote_mtime(sftp, source_path=source_path, remote_path=remote_path)
-
-
-def upload_linux_file_with_sftp(
-    sftp: paramiko.SFTPClient,
-    *,
-    source_path: Path,
-    upload_path: Path,
-    remote_path: str,
-    target: str,
-    skip_existing: bool,
-) -> tuple[str, str]:
-    ensure_linux_remote_dirs_sftp(sftp, remote_path)
-    if skip_existing and linux_sftp_path_exists(sftp, remote_path):
-        return 'skipped', f'跳过 {source_path.name} -> {target}:{remote_path}'
-    upload_file_via_sftp(
-        sftp,
-        source_path=source_path,
-        upload_path=upload_path,
-        remote_path=remote_path,
-    )
-    return 'uploaded', f'已上传 {source_path.name} -> {target}:{remote_path}'
-
-
-def upload_to_linux_via_sftp(
-    source_path: Path,
-    *,
-    upload_path: Path,
-    remote_path: str,
-    target: str,
-    host: str,
-    user: str,
-    ssh_key: str | None,
-    password: str | None,
-    port: int,
-    skip_existing: bool,
-    proxy_url: str | None,
-) -> tuple[str, str]:
-    try:
-        client, sftp = open_linux_sftp_client(
-            host=host,
-            user=user,
-            ssh_key=ssh_key,
-            password=password,
-            port=port,
-            proxy_url=proxy_url,
-        )
-        try:
-            return upload_linux_file_with_sftp(
-                sftp,
-                source_path=source_path,
-                upload_path=upload_path,
-                remote_path=remote_path,
-                target=target,
-                skip_existing=skip_existing,
-            )
-        finally:
-            sftp.close()
-    except Exception as exc:
-        return 'failed', f'失败 {source_path.name}：{exc}'
-    finally:
-        if 'client' in locals():
-            client.close()
-
-
-def check_linux_remote_skip_via_sftp(
-    source_path: Path,
-    *,
-    remote_path: str,
-    target: str,
-    host: str,
-    user: str,
-    ssh_key: str | None,
-    password: str | None,
-    port: int,
-    proxy_url: str | None,
-) -> tuple[str, str] | None:
-    try:
-        client, sftp = open_linux_sftp_client(
-            host=host,
-            user=user,
-            ssh_key=ssh_key,
-            password=password,
-            port=port,
-            proxy_url=proxy_url,
-        )
-        try:
-            if linux_sftp_path_exists(sftp, remote_path):
-                return 'skipped', f'跳过 {source_path.name} -> {target}:{remote_path}'
-            return None
-        finally:
-            sftp.close()
-    except Exception as exc:
-        return 'failed', f'失败 {source_path.name}：{exc}'
-    finally:
-        if 'client' in locals():
-            client.close()
-
-
-def upload_to_linux(
-    source_path: Path,
-    *,
-    upload_path: Path | None = None,
-    base_dir: Path,
-    remote_dir: str,
-    host: str,
-    user: str,
-    ssh_key: str | None,
-    password: str | None,
-    port: int,
-    dry_run: bool,
-    skip_existing: bool,
-    existing_paths: set[str] | None = None,
-    compression_strategy: str | None = None,
-    proxy_url: str | None = None,
-) -> tuple[str, str]:
-    upload_path = upload_path or source_path
-    remote_path = build_linux_remote_path(source_path, base_dir=base_dir, remote_dir=remote_dir, compression_strategy=compression_strategy)
-    target = f'{user}@{host}'
-
-    if dry_run:
-        return 'dry-run', f'演练 {source_path.name} -> {target}:{remote_path}'
-
-    if skip_existing and existing_paths is not None and remote_path in existing_paths:
-        return 'skipped', f'跳过 {source_path.name} -> {target}:{remote_path}'
-
-    use_sftp = (password and not ssh_key) or proxy_url
-    if use_sftp:
-        return upload_to_linux_via_sftp(
-            source_path,
-            upload_path=upload_path,
-            remote_path=remote_path,
-            target=target,
-            host=host,
-            user=user,
-            ssh_key=ssh_key,
-            password=password,
-            port=port,
-            skip_existing=skip_existing,
-            proxy_url=proxy_url,
-        )
-
-    ssh_base_cmd = [
-        'ssh', '-i', ssh_key or '',
-        '-p', str(port),
-        '-o', 'BatchMode=yes',
-        '-o', 'StrictHostKeyChecking=accept-new',
-        target,
-    ]
-    mkdir_cmd = [*ssh_base_cmd, 'mkdir', '-p', str(PurePosixPath(remote_path).parent)]
-    exists_cmd = [*ssh_base_cmd, 'test', '!', '-e', remote_path]
-    scp_cmd = [
-        'scp', '-i', ssh_key or '',
-        '-P', str(port),
-        '-o', 'BatchMode=yes',
-        '-o', 'StrictHostKeyChecking=accept-new',
-        str(upload_path),
-        f'{target}:{remote_path}',
-    ]
-
-    try:
-        subprocess.run(mkdir_cmd, check=True, capture_output=True, **SUBPROCESS_TEXT_KWARGS)
-        if skip_existing:
-            try:
-                subprocess.run(exists_cmd, check=True, capture_output=True, **SUBPROCESS_TEXT_KWARGS)
-            except subprocess.CalledProcessError as exc:
-                if exc.returncode == 1:
-                    return 'skipped', f'跳过 {source_path.name} -> {target}:{remote_path}'
-                detail = exc.stderr.strip() or exc.stdout.strip() or str(exc)
-                return 'failed', f'失败 {source_path.name}：{detail}'
-        subprocess.run(scp_cmd, check=True, capture_output=True, **SUBPROCESS_TEXT_KWARGS)
-        set_linux_remote_mtime_via_ssh(
-            source_path=source_path,
-            remote_path=remote_path,
-            target=target,
-            ssh_key=ssh_key,
-            port=port,
-        )
-        return 'uploaded', f'已上传 {source_path.name} -> {target}:{remote_path}'
-    except subprocess.CalledProcessError as exc:
-        detail = exc.stderr.strip() or exc.stdout.strip() or str(exc)
-        return 'failed', f'失败 {source_path.name}：{detail}'
-
-
-def check_linux_remote_skip_result(
-    source_path: Path,
-    *,
-    base_dir: Path,
-    remote_dir: str,
-    host: str,
-    user: str,
-    ssh_key: str | None,
-    password: str | None,
-    port: int,
-    proxy_url: str | None,
-    compression_strategy: str | None = None,
-) -> tuple[str, str] | None:
-    remote_path = build_linux_remote_path(source_path, base_dir=base_dir, remote_dir=remote_dir, compression_strategy=compression_strategy)
-    target = f'{user}@{host}'
-
-    use_sftp = (password and not ssh_key) or proxy_url
-    if use_sftp:
-        return check_linux_remote_skip_via_sftp(
-            source_path,
-            remote_path=remote_path,
-            target=target,
-            host=host,
-            user=user,
-            ssh_key=ssh_key,
-            password=password,
-            port=port,
-            proxy_url=proxy_url,
-        )
-
-    ssh_base_cmd = [
-        'ssh', '-i', ssh_key or '',
-        '-p', str(port),
-        '-o', 'BatchMode=yes',
-        '-o', 'StrictHostKeyChecking=accept-new',
-        target,
-    ]
-    exists_cmd = [*ssh_base_cmd, 'test', '-e', remote_path]
-    try:
-        subprocess.run(exists_cmd, check=True, capture_output=True, **SUBPROCESS_TEXT_KWARGS)
-        return 'skipped', f'跳过 {source_path.name} -> {target}:{remote_path}'
-    except subprocess.CalledProcessError as exc:
-        if exc.returncode == 1:
-            return None
-        detail = exc.stderr.strip() or exc.stdout.strip() or str(exc)
-        return 'failed', f'失败 {source_path.name}：{detail}'
-
-
-def upload_pending_linux_files(
-    items: list[PlannedUpload],
-    *,
-    base_dir: Path,
-    remote_dir: str,
-    host: str,
-    user: str,
-    ssh_key: str | None,
-    password: str | None,
-    port: int,
-    proxy_url: str | None,
-    compression: str | None = COMPATIBILITY_COMPRESSION_MODE,
-    log_callback=None,
-) -> list[tuple[PlannedUpload, tuple[str, str]]]:
-    if not items:
-        return []
-
-    target = f'{user}@{host}'
-    client: paramiko.SSHClient | None = None
-    sftp: paramiko.SFTPClient | None = None
-    needs_reconnect = True
-    use_legacy_per_file_upload = False
-    allow_legacy_fallback = ssh_key is not None and password is None and not proxy_url
-    results: list[tuple[PlannedUpload, tuple[str, str]]] = []
-    compression = normalize_compression_mode(compression)
-    compression_total = count_preparable_uploads(items)
-    compression_index = 0
-
-    try:
-        for item in items:
-            path = item.source_path
-            remote_path = build_linux_remote_path(path, base_dir=base_dir, remote_dir=remote_dir, compression_strategy=item.compression_strategy)
-            prepared: PreparedUpload | None = None
-            try:
-                if not use_legacy_per_file_upload and needs_reconnect:
-                    try:
-                        client, sftp = open_linux_sftp_client(
-                            host=host,
-                            user=user,
-                            ssh_key=ssh_key,
-                            password=password,
-                            port=port,
-                            proxy_url=proxy_url,
-                        )
-                        needs_reconnect = False
-                    except Exception:
-                        if not allow_legacy_fallback:
-                            raise
-                        use_legacy_per_file_upload = True
-
-                prepared = call_prepare_upload_file(path, compression)
-                if prepared.compressed:
-                    compression_index += 1
-                    emit_compression_progress(
-                        'linux',
-                        index=compression_index,
-                        total=compression_total,
-                        prepared=prepared,
-                        log_callback=log_callback,
-                    )
-                if use_legacy_per_file_upload:
-                    status, message = upload_to_linux(
-                        path,
-                        upload_path=prepared.upload_path,
-                        base_dir=base_dir,
-                        remote_dir=remote_dir,
-                        host=host,
-                        user=user,
-                        ssh_key=ssh_key,
-                        password=password,
-                        port=port,
-                        dry_run=False,
-                        skip_existing=False,
-                        existing_paths=None,
-                        proxy_url=proxy_url,
-                    )
-                    results.append((item, (status, message)))
-                    continue
-
-                try:
-                    status, message = upload_linux_file_with_sftp(
-                        sftp,
-                        source_path=path,
-                        upload_path=prepared.upload_path,
-                        remote_path=remote_path,
-                        target=target,
-                        skip_existing=False,
-                    )
-                except Exception as exc:
-                    if not is_linux_sftp_connection_error(exc):
-                        raise
-                    close_linux_sftp_session(client, sftp)
-                    client = None
-                    sftp = None
-                    needs_reconnect = True
-                    try:
-                        client, sftp = open_linux_sftp_client(
-                            host=host,
-                            user=user,
-                            ssh_key=ssh_key,
-                            password=password,
-                            port=port,
-                            proxy_url=proxy_url,
-                        )
-                        needs_reconnect = False
-                    except Exception:
-                        if not allow_legacy_fallback:
-                            raise
-                        use_legacy_per_file_upload = True
-                        status, message = upload_to_linux(
-                            path,
-                            upload_path=prepared.upload_path,
-                            base_dir=base_dir,
-                            remote_dir=remote_dir,
-                            host=host,
-                            user=user,
-                            ssh_key=ssh_key,
-                            password=password,
-                            port=port,
-                            dry_run=False,
-                            skip_existing=False,
-                            existing_paths=None,
-                            compression_strategy=prepared.compression_strategy,
-                            proxy_url=proxy_url,
-                        )
-                        results.append((item, (status, message)))
-                        continue
-                    try:
-                        status, message = upload_linux_file_with_sftp(
-                            sftp,
-                            source_path=path,
-                            upload_path=prepared.upload_path,
-                            remote_path=remote_path,
-                            target=target,
-                            skip_existing=False,
-                        )
-                    except Exception as retry_exc:
-                        if not is_linux_sftp_connection_error(retry_exc):
-                            raise
-                        close_linux_sftp_session(client, sftp)
-                        client = None
-                        sftp = None
-                        needs_reconnect = True
-                        if not allow_legacy_fallback:
-                            raise
-                        use_legacy_per_file_upload = True
-                        status, message = upload_to_linux(
-                            path,
-                            upload_path=prepared.upload_path,
-                            base_dir=base_dir,
-                            remote_dir=remote_dir,
-                            host=host,
-                            user=user,
-                            ssh_key=ssh_key,
-                            password=password,
-                            port=port,
-                            dry_run=False,
-                            skip_existing=False,
-                            existing_paths=None,
-                            compression_strategy=prepared.compression_strategy,
-                            proxy_url=proxy_url,
-                        )
-                        results.append((item, (status, message)))
-                        continue
-                results.append((item, (status, message)))
-            except Exception as exc:
-                if is_linux_sftp_connection_error(exc):
-                    close_linux_sftp_session(client, sftp)
-                    client = None
-                    sftp = None
-                    needs_reconnect = True
-                error_prefix = 'Linux 连接失败，' if prepared is None else '压缩失败，'
-                results.append((item, ('failed', f'失败 {path.name}：{error_prefix}{exc}')))
-            finally:
-                if prepared is not None:
-                    cleanup_prepared_upload(prepared)
-    finally:
-        close_linux_sftp_session(client, sftp)
-    return results
-
-
-def upload_files_to_linux_via_password(
-    files: list[Path],
-    *,
-    base_dir: Path,
-    remote_dir: str,
-    host: str,
-    user: str,
-    ssh_key: str | None,
-    password: str,
-    port: int,
-    dry_run: bool,
-    skip_existing: bool,
-    existing_paths: set[str] | None,
-    proxy_url: str | None = None,
-    compression: str | None = COMPATIBILITY_COMPRESSION_MODE,
-) -> list[tuple[str, str, bool, str | None]]:
-    compression = normalize_compression_mode(compression)
-    if dry_run:
-        return [
-            (
-                'dry-run',
-                f'演练 {path.name} -> {user}@{host}:{build_effective_linux_remote_path(path, base_dir=base_dir, remote_dir=remote_dir, compression=compression)}',
-                *get_expected_upload_cache_semantics(path, compression),
-            )
-            for path in files
-        ]
-
-    target = f'{user}@{host}'
-    planned_results: list[tuple[Path, PlannedUpload | None, tuple[str, str, bool, str | None] | None]] = []
-    pending_items: list[PlannedUpload] = []
-    for path in files:
-        compressed, compression_strategy = get_expected_upload_cache_semantics(path, compression)
-        remote_path = build_linux_remote_path(
-            path,
-            base_dir=base_dir,
-            remote_dir=remote_dir,
-            compression_strategy=compression_strategy,
-        )
-        cached_result = None
-        if skip_existing and existing_paths is not None and remote_path in existing_paths:
-            cached_result = (
-                'skipped',
-                f'跳过 {path.name} -> {target}:{remote_path}',
-                compressed,
-                compression_strategy,
-            )
-            planned_results.append((path, None, cached_result))
-            continue
-        item = PlannedUpload(
-            source_path=path,
-            relative_path=build_upload_relative_path(path, base_dir=base_dir, compression_strategy=compression_strategy),
-            compressed=compressed,
-            compression_strategy=compression_strategy,
-        )
-        pending_items.append(item)
-        planned_results.append((path, item, None))
-
-    if not pending_items:
-        return [cached_result for _, _, cached_result in planned_results if cached_result is not None]
-
-    pending_results = {
-        item.source_path: result
-        for item, result in upload_pending_linux_files(
-            pending_items,
-            base_dir=base_dir,
-            remote_dir=remote_dir,
-            host=host,
-            user=user,
-            ssh_key=ssh_key,
-            password=password,
-            port=port,
-            proxy_url=proxy_url,
-            compression=compression,
-        )
-    }
-    results: list[tuple[str, str, bool, str | None]] = []
-    for path, item, cached_result in planned_results:
-        if cached_result is not None:
-            results.append(cached_result)
-            continue
-        status, message = pending_results[path]
-        semantics = (item.compressed, item.compression_strategy) if item is not None and status == 'uploaded' else (False, None)
-        results.append((status, message, *semantics))
-    return results
-
-
 def get_target_display_name(target: str) -> str:
-    return {
-        'r2': 'R2',
-        'linux': 'Linux',
-        'qiniu': '七牛',
-    }.get(target, target.upper())
+    return 'R2' if target == 'r2' else target.upper()
 
 
 def format_result_message(target: str, message: str) -> str:
@@ -2906,78 +1934,6 @@ def upload_pending_r2_files(
     return results
 
 
-def upload_pending_qiniu_files(
-    items: list[PlannedUpload],
-    *,
-    base_dir: Path,
-    bucket: str,
-    prefix: str,
-    access_key: str,
-    secret_key: str,
-    dry_run: bool,
-    skip_existing: bool,
-    existing_keys: set[str] | None,
-    compression: str | None = COMPATIBILITY_COMPRESSION_MODE,
-    log_callback=None,
-) -> list[tuple[PlannedUpload, tuple[str, str, bool, str | None]]]:
-    if not items:
-        return []
-    auth = None
-    if not dry_run:
-        try:
-            auth = qiniu.Auth(access_key, secret_key)
-        except Exception as exc:
-            return [(item, ('failed', f'失败 {item.source_path.name}：{exc}', False, None)) for item in items]
-    results: list[tuple[PlannedUpload, tuple[str, str, bool, str | None]]] = []
-    compression = normalize_compression_mode(compression)
-    compression_total = 0 if dry_run else count_preparable_uploads(items)
-    compression_index = 0
-    for item in items:
-        prepared = PreparedUpload(
-            source_path=item.source_path,
-            upload_path=item.source_path,
-            temp_path=None,
-            compressed=item.compressed,
-            compression_strategy=item.compression_strategy,
-        ) if dry_run else None
-        try:
-            if prepared is None:
-                try:
-                    prepared = call_prepare_upload_file(item.source_path, compression)
-                    if prepared.compressed:
-                        compression_index += 1
-                        emit_compression_progress(
-                            'qiniu',
-                            index=compression_index,
-                            total=compression_total,
-                            prepared=prepared,
-                            log_callback=log_callback,
-                        )
-                except Exception as exc:
-                    results.append((item, ('failed', f'失败 {item.source_path.name}：压缩失败，{exc}', False, None)))
-                    continue
-            status, message = upload_to_qiniu(
-                item.source_path,
-                upload_path=prepared.upload_path,
-                base_dir=base_dir,
-                bucket=bucket,
-                prefix=prefix,
-                access_key=access_key,
-                secret_key=secret_key,
-                dry_run=dry_run,
-                skip_existing=skip_existing,
-                existing_keys=existing_keys,
-                compression_strategy=prepared.compression_strategy,
-                auth=auth,
-            )
-            semantics = get_upload_cache_semantics(prepared) if status != 'failed' else (False, None)
-            results.append((item, (status, message, *semantics)))
-        finally:
-            if prepared is not None:
-                cleanup_prepared_upload(prepared)
-    return results
-
-
 def apply_upload_result(
     *,
     target_label: str,
@@ -3017,185 +1973,6 @@ def emit_message(message: str, log_callback=None, *, stream=None) -> None:
     print(message, file=stream or sys.stdout, flush=True)
 
 
-def upload_one(
-    path: Path,
-    *,
-    base_dir: Path,
-    target: str,
-    endpoint: str,
-    bucket: str,
-    prefix: str,
-    access_key: str,
-    secret_key: str,
-    region: str,
-    dry_run: bool,
-    skip_existing: bool,
-    existing_keys: set[str] | None,
-    existing_linux_paths: set[str] | None,
-    existing_linux_filenames: set[str] | None = None,
-    verify_remote: bool = False,
-    linux_verify_checked: bool = False,
-    r2_proxy: str | None,
-    linux_host: str | None,
-    linux_user: str | None,
-    linux_dir: str | None,
-    linux_key: str | None,
-    linux_password: str | None,
-    linux_port: int,
-    linux_proxy: str | None,
-    qiniu_bucket: str,
-    qiniu_prefix: str,
-    qiniu_access_key: str,
-    qiniu_secret_key: str,
-    qiniu_existing_keys: set[str] | None,
-    target_labels: tuple[str, ...] | None = None,
-    compression: str | None = COMPATIBILITY_COMPRESSION_MODE,
-) -> list[tuple[str, str, bool, str | None]]:
-    normalized_target = normalize_target(target)
-    compression = normalize_compression_mode(compression)
-    label_order = tuple(target_labels) if target_labels is not None else targets_for_mode(normalized_target)
-    compressed, compression_strategy = get_expected_upload_cache_semantics(path, compression)
-    r2_object_key = build_object_key(path, base_dir=base_dir, prefix=prefix, compression_strategy=compression_strategy)
-    linux_remote_path = build_linux_remote_path(path, base_dir=base_dir, remote_dir=linux_dir or '', compression_strategy=compression_strategy)
-    qiniu_object_key = build_object_key(path, base_dir=base_dir, prefix=qiniu_prefix, compression_strategy=compression_strategy)
-
-    if dry_run:
-        prepared = PreparedUpload(
-            source_path=path,
-            upload_path=path,
-            temp_path=None,
-            compressed=False,
-            compression_strategy=None,
-        )
-    else:
-        prepared = None
-
-    results: list[tuple[str, str, bool, str | None]] = []
-    try:
-        for target_label in label_order:
-            if target_label == 'r2' and skip_existing and existing_keys is not None and r2_object_key in existing_keys:
-                results.append(('skipped', f'跳过 {path.name} -> s3://{bucket}/{r2_object_key}', compressed, compression_strategy))
-                continue
-            if target_label == 'r2':
-                if prepared is None:
-                    try:
-                        prepared = call_prepare_upload_file(path, compression)
-                    except Exception as exc:
-                        results.append(('failed', f'失败 {path.name}：压缩失败，{exc}', False, None))
-                        continue
-                status, message = upload_to_r2(
-                    path,
-                    upload_path=prepared.upload_path,
-                    base_dir=base_dir,
-                    endpoint=endpoint,
-                    bucket=bucket,
-                    prefix=prefix,
-                    access_key=access_key,
-                    secret_key=secret_key,
-                    region=region,
-                    dry_run=dry_run,
-                    skip_existing=skip_existing,
-                    existing_keys=existing_keys,
-                    compression_strategy=prepared.compression_strategy,
-                    proxy_url=r2_proxy,
-                )
-                semantics = get_upload_cache_semantics(prepared) if status != 'failed' else (False, None)
-                results.append((status, message, *semantics))
-                continue
-            if target_label == 'linux' and skip_existing and existing_linux_paths is not None and linux_remote_path in existing_linux_paths:
-                results.append(('skipped', f'跳过 {path.name} -> {(linux_user or "")}@{(linux_host or "")}:{linux_remote_path}', compressed, compression_strategy))
-                continue
-            if target_label == 'linux' and skip_existing and existing_linux_filenames is not None and path.name in existing_linux_filenames:
-                results.append(('skipped', f'跳过 {path.name} -> {(linux_user or "")}@{(linux_host or "")}:{linux_remote_path}', compressed, compression_strategy))
-                continue
-            if target_label == 'linux':
-                remote_skip_result = None
-                remote_skip_checked = linux_verify_checked
-                if skip_existing and verify_remote and not linux_verify_checked:
-                    remote_skip_checked = True
-                    remote_skip_kwargs = {
-                        'base_dir': base_dir,
-                        'remote_dir': linux_dir or '',
-                        'host': linux_host or '',
-                        'user': linux_user or '',
-                        'ssh_key': linux_key,
-                        'password': linux_password,
-                        'port': linux_port,
-                        'proxy_url': linux_proxy,
-                    }
-                    if is_avif_compression_strategy(compression_strategy):
-                        remote_skip_kwargs['compression_strategy'] = compression_strategy
-                    remote_skip_result = check_linux_remote_skip_result(path, **remote_skip_kwargs)
-                if remote_skip_result is not None:
-                    status, message = remote_skip_result
-                    semantics = (compressed, compression_strategy) if status == 'skipped' else (False, None)
-                    results.append((status, message, *semantics))
-                    continue
-                if prepared is None:
-                    try:
-                        prepared = call_prepare_upload_file(path, compression)
-                    except Exception as exc:
-                        results.append(('failed', f'失败 {path.name}：压缩失败，{exc}', False, None))
-                        continue
-                linux_pending_selected = skip_existing and (
-                    (existing_linux_paths is not None and linux_remote_path not in existing_linux_paths)
-                    or (existing_linux_filenames is not None and path.name not in existing_linux_filenames)
-                )
-                linux_skip_existing = skip_existing
-                if remote_skip_checked and remote_skip_result is None:
-                    linux_skip_existing = False
-                elif not verify_remote and linux_pending_selected:
-                    linux_skip_existing = False
-                upload_linux_kwargs = {
-                    'upload_path': prepared.upload_path,
-                    'base_dir': base_dir,
-                    'remote_dir': linux_dir or '',
-                    'host': linux_host or '',
-                    'user': linux_user or '',
-                    'ssh_key': linux_key,
-                    'password': linux_password,
-                    'port': linux_port,
-                    'dry_run': dry_run,
-                    'skip_existing': linux_skip_existing,
-                    'existing_paths': existing_linux_paths,
-                    'proxy_url': linux_proxy,
-                }
-                if prepared.compression_strategy is not None:
-                    upload_linux_kwargs['compression_strategy'] = prepared.compression_strategy
-                status, message = upload_to_linux(path, **upload_linux_kwargs)
-                semantics = get_upload_cache_semantics(prepared) if status != 'failed' else (False, None)
-                results.append((status, message, *semantics))
-                continue
-            if target_label == 'qiniu' and skip_existing and qiniu_existing_keys is not None and qiniu_object_key in qiniu_existing_keys:
-                results.append(('skipped', f'跳过 {path.name} -> qiniu://{qiniu_bucket}/{qiniu_object_key}', compressed, compression_strategy))
-                continue
-            if prepared is None:
-                try:
-                    prepared = call_prepare_upload_file(path, compression)
-                except Exception as exc:
-                    results.append(('failed', f'失败 {path.name}：压缩失败，{exc}', False, None))
-                    continue
-            status, message = upload_to_qiniu(
-                path,
-                upload_path=prepared.upload_path,
-                base_dir=base_dir,
-                bucket=qiniu_bucket,
-                prefix=qiniu_prefix,
-                access_key=qiniu_access_key,
-                secret_key=qiniu_secret_key,
-                dry_run=dry_run,
-                skip_existing=skip_existing,
-                existing_keys=qiniu_existing_keys,
-                compression_strategy=prepared.compression_strategy,
-            )
-            semantics = get_upload_cache_semantics(prepared) if status != 'failed' else (False, None)
-            results.append((status, message, *semantics))
-        return results
-    finally:
-        if not dry_run and prepared is not None:
-            cleanup_prepared_upload(prepared)
-
-
 def run_sync_cache_only(
     *,
     config: UploadRuntimeConfig,
@@ -3206,42 +1983,53 @@ def run_sync_cache_only(
     log_callback=None,
 ) -> int:
     _ = cache_file
-    target_labels = targets_for_mode(config.target)
     normalized_prefix = config.prefix.strip('/')
-    normalized_qiniu_prefix = config.qiniu_prefix.strip('/')
 
     emit_message('模式：仅同步缓存', log_callback)
 
-    def log_summary(label: str, *, present: int, updated: int, removed: int, unchanged: int, failed: int) -> None:
+    def log_summary(*, present: int, updated: int, removed: int, unchanged: int, failed: int) -> None:
         emit_message(
-            f'{label} 缓存同步：远端存在 {present}，已更新 {updated}，已移除 {removed}，未变化 {unchanged}，失败 {failed}',
+            f'R2 缓存同步：远端存在 {present}，已更新 {updated}，已移除 {removed}，未变化 {unchanged}，失败 {failed}',
             log_callback,
         )
 
-    if 'r2' in target_labels:
-        object_keys = [build_effective_object_key(path, base_dir=folder, prefix=normalized_prefix, compression=config.compression) for path in files]
-        existing_keys, list_error = list_existing_keys(
-            endpoint=config.endpoint,
-            bucket=config.bucket,
-            prefix=normalized_prefix,
-            access_key=config.access_key or '',
-            secret_key=config.secret_key or '',
-            region=config.region,
-            proxy_url=config.r2_proxy,
-            object_keys=object_keys,
-        )
-        if list_error:
-            emit_message(f'列出现有 R2 对象失败：{list_error}', log_callback, stream=sys.stderr)
-            return 1
+    object_keys = [
+        build_effective_object_key(path, base_dir=folder, prefix=normalized_prefix, compression=config.compression)
+        for path in files
+    ]
+    existing_keys, list_error = list_existing_keys(
+        endpoint=config.endpoint,
+        bucket=config.bucket,
+        prefix=normalized_prefix,
+        access_key=config.access_key or '',
+        secret_key=config.secret_key or '',
+        region=config.region,
+        proxy_url=config.r2_proxy,
+        object_keys=object_keys,
+    )
+    if list_error:
+        emit_message(f'列出现有 R2 对象失败：{list_error}', log_callback, stream=sys.stderr)
+        return 1
 
-        present = updated = removed = unchanged = 0
-        for path in files:
-            compressed, compression_strategy = get_expected_upload_cache_semantics(path, config.compression)
-            object_key = build_object_key(path, base_dir=folder, prefix=normalized_prefix, compression_strategy=compression_strategy)
-            target_id = build_r2_cache_key(config.bucket, object_key)
-            if object_key in existing_keys:
-                present += 1
-                if is_target_synced(
+    present = updated = removed = unchanged = 0
+    for path in files:
+        compressed, compression_strategy = get_expected_upload_cache_semantics(path, config.compression)
+        object_key = build_object_key(path, base_dir=folder, prefix=normalized_prefix, compression_strategy=compression_strategy)
+        target_id = build_r2_cache_key(config.bucket, object_key)
+        if object_key in existing_keys:
+            present += 1
+            if is_target_synced(
+                cache_data,
+                path,
+                base_dir=folder,
+                target_label='r2',
+                target_id=target_id,
+                compressed=compressed,
+                compression_strategy=compression_strategy,
+            ):
+                unchanged += 1
+            else:
+                set_target_synced(
                     cache_data,
                     path,
                     base_dir=folder,
@@ -3249,162 +2037,26 @@ def run_sync_cache_only(
                     target_id=target_id,
                     compressed=compressed,
                     compression_strategy=compression_strategy,
-                ):
-                    unchanged += 1
-                else:
-                    set_target_synced(
-                        cache_data,
-                        path,
-                        base_dir=folder,
-                        target_label='r2',
-                        target_id=target_id,
-                        compressed=compressed,
-                        compression_strategy=compression_strategy,
-                    )
-                    updated += 1
+                )
+                updated += 1
+        else:
+            if clear_target_synced(cache_data, path, base_dir=folder, target_label='r2'):
+                removed += 1
             else:
-                if clear_target_synced(cache_data, path, base_dir=folder, target_label='r2'):
-                    removed += 1
-                else:
-                    unchanged += 1
-        log_summary('R2', present=present, updated=updated, removed=removed, unchanged=unchanged, failed=0)
-
-    if 'linux' in target_labels:
-        planned_files = []
-        for path in files:
-            compressed, compression_strategy = get_expected_upload_cache_semantics(path, config.compression)
-            planned_files.append(PlannedUpload(
-                source_path=path,
-                relative_path=build_upload_relative_path(path, base_dir=folder, compression_strategy=compression_strategy),
-                compressed=compressed,
-                compression_strategy=compression_strategy,
-            ))
-        try:
-            existing_linux_paths, _, _ = precheck_pending_linux_items(
-                planned_files,
-                base_dir=folder,
-                config=config,
-            )
-        except RuntimeError as exc:
-            emit_message(format_result_message('linux', str(exc)), log_callback)
-            return 1
-
-        present = updated = removed = unchanged = 0
-        for path in files:
-            compressed, compression_strategy = get_expected_upload_cache_semantics(path, config.compression)
-            remote_path = build_linux_remote_path(path, base_dir=folder, remote_dir=config.linux_dir or '', compression_strategy=compression_strategy)
-            target_id = build_linux_cache_key(config.linux_host or '', remote_path)
-            if remote_path in existing_linux_paths:
-                present += 1
-                if is_target_synced(
-                    cache_data,
-                    path,
-                    base_dir=folder,
-                    target_label='linux',
-                    target_id=target_id,
-                    compressed=compressed,
-                    compression_strategy=compression_strategy,
-                ):
-                    unchanged += 1
-                else:
-                    set_target_synced(
-                        cache_data,
-                        path,
-                        base_dir=folder,
-                        target_label='linux',
-                        target_id=target_id,
-                        compressed=compressed,
-                        compression_strategy=compression_strategy,
-                    )
-                    updated += 1
-            else:
-                if clear_target_synced(cache_data, path, base_dir=folder, target_label='linux'):
-                    removed += 1
-                else:
-                    unchanged += 1
-        log_summary('Linux', present=present, updated=updated, removed=removed, unchanged=unchanged, failed=0)
-
-    if 'qiniu' in target_labels:
-        object_keys = [build_effective_object_key(path, base_dir=folder, prefix=normalized_qiniu_prefix, compression=config.compression) for path in files]
-        existing_keys, list_error = list_existing_qiniu_keys(
-            config.qiniu_bucket,
-            object_keys,
-            config.qiniu_access_key or '',
-            config.qiniu_secret_key or '',
-        )
-        if list_error:
-            emit_message(f'列出现有七牛对象失败：{list_error}', log_callback, stream=sys.stderr)
-            return 1
-
-        present = updated = removed = unchanged = 0
-        for path in files:
-            compressed, compression_strategy = get_expected_upload_cache_semantics(path, config.compression)
-            object_key = build_object_key(path, base_dir=folder, prefix=normalized_qiniu_prefix, compression_strategy=compression_strategy)
-            target_id = build_qiniu_cache_key(config.qiniu_bucket, object_key)
-            if object_key in existing_keys:
-                present += 1
-                if is_target_synced(
-                    cache_data,
-                    path,
-                    base_dir=folder,
-                    target_label='qiniu',
-                    target_id=target_id,
-                    compressed=compressed,
-                    compression_strategy=compression_strategy,
-                ):
-                    unchanged += 1
-                else:
-                    set_target_synced(
-                        cache_data,
-                        path,
-                        base_dir=folder,
-                        target_label='qiniu',
-                        target_id=target_id,
-                        compressed=compressed,
-                        compression_strategy=compression_strategy,
-                    )
-                    updated += 1
-            else:
-                if clear_target_synced(cache_data, path, base_dir=folder, target_label='qiniu'):
-                    removed += 1
-                else:
-                    unchanged += 1
-        log_summary('七牛', present=present, updated=updated, removed=removed, unchanged=unchanged, failed=0)
+                unchanged += 1
+    log_summary(present=present, updated=updated, removed=removed, unchanged=unchanged, failed=0)
 
     emit_message('完成。缓存同步已完成，失败 0', log_callback)
     return 0
 
 
-
-@dataclass(frozen=True)
-class PrecheckResult:
-    existing_keys: set[str]
-    existing_linux_paths: set[str]
-    existing_linux_filenames: set[str]
-    qiniu_existing_keys: set[str]
-    verified_linux_skip_results: list[tuple[Path, tuple[str, str, bool, str | None]]]
-    remote_precheck_counts: dict[str, int]
-    cache_dirty: bool
-
-
 def _validate_target_config(config: UploadRuntimeConfig, target_labels: tuple[str, ...], needs_remote: bool, *, log_callback=None) -> str | None:
-    """Validate config; returns error message or None."""
-    normalized_target = config.target
-    if normalized_target in {'r2', 'all'}:
-        if needs_remote and not config.endpoint:
-            return '缺少 R2 Endpoint。请设置 --endpoint、R2_ENDPOINT 或 CLOUDFLARE_ACCOUNT_ID。'
-        if needs_remote and (not config.access_key or not config.secret_key):
-            return '缺少 R2 凭据。请在环境变量或 env 文件中设置 CLOUDFLARE_R2_ACCESS_KEY_ID/CLOUDFLARE_R2_SECRET_ACCESS_KEY 或 AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY。'
-    if normalized_target in {'linux', 'all'} and (
-        not config.linux_host or not config.linux_user or not config.linux_dir
-        or (not config.linux_key and not config.linux_password)
-    ):
-        return '缺少 Linux 上传配置。请设置 --linux-host、--linux-user、--linux-dir，并提供 --linux-key 或 --linux-password，或使用对应环境变量。'
-    if normalized_target in {'qiniu', 'all'}:
-        if not config.qiniu_bucket:
-            return '缺少七牛桶名称。请设置 --qiniu-bucket、QINIU_BUCKET 或 --bucket。'
-        if needs_remote and (not config.qiniu_access_key or not config.qiniu_secret_key):
-            return '缺少七牛凭据。请设置 QINIU_ACCESS_KEY 和 QINIU_SECRET_KEY。'
+    """Validate R2 image-upload config; returns error message or None."""
+    _ = target_labels, log_callback
+    if needs_remote and not config.endpoint:
+        return '缺少 R2 Endpoint。请设置 --endpoint、R2_ENDPOINT 或 CLOUDFLARE_ACCOUNT_ID。'
+    if needs_remote and (not config.access_key or not config.secret_key):
+        return '缺少 R2 凭据。请在环境变量或 env 文件中设置 CLOUDFLARE_R2_ACCESS_KEY_ID/CLOUDFLARE_R2_SECRET_ACCESS_KEY 或 AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY。'
     return None
 
 
@@ -3424,34 +2076,17 @@ def _build_existing_sets_from_cache(
     folder: Path,
     *,
     skip_existing: bool,
-) -> tuple[set[str] | None, set[str] | None, set[str] | None, set[str] | None]:
-    """Build initial existing sets from cache hits (non-pending items)."""
+) -> set[str] | None:
+    """Build initial R2 existing-key set from cache hits (non-pending items)."""
+    _ = target_labels
+    if not skip_existing:
+        return None
     normalized_prefix = config.prefix.strip('/')
-    normalized_qiniu_prefix = config.qiniu_prefix.strip('/')
-    existing_keys: set[str] | None = None
-    existing_linux_paths: set[str] | None = None
-    existing_linux_filenames: set[str] | None = None
-    qiniu_existing_keys: set[str] | None = None
-
-    if 'r2' in target_labels and skip_existing:
-        pending_r2_paths = {p.source_path for p in pending_by_target.get('r2', [])}
-        existing_keys = {
-            build_effective_object_key(p, base_dir=folder, prefix=normalized_prefix, compression=config.compression)
-            for p in files if p not in pending_r2_paths
-        }
-    if 'linux' in target_labels and skip_existing:
-        pending_linux_paths = {p.source_path for p in pending_by_target.get('linux', [])}
-        existing_linux_paths = {
-            build_effective_linux_remote_path(p, base_dir=folder, remote_dir=config.linux_dir or '', compression=config.compression)
-            for p in files if p not in pending_linux_paths
-        }
-    if 'qiniu' in target_labels and skip_existing:
-        pending_qiniu_paths = {p.source_path for p in pending_by_target.get('qiniu', [])}
-        qiniu_existing_keys = {
-            build_effective_object_key(p, base_dir=folder, prefix=normalized_qiniu_prefix, compression=config.compression)
-            for p in files if p not in pending_qiniu_paths
-        }
-    return existing_keys, existing_linux_paths, existing_linux_filenames, qiniu_existing_keys
+    pending_r2_paths = {p.source_path for p in pending_by_target.get('r2', [])}
+    return {
+        build_effective_object_key(p, base_dir=folder, prefix=normalized_prefix, compression=config.compression)
+        for p in files if p not in pending_r2_paths
+    }
 
 
 def _precheck_object_store_target(
@@ -3468,7 +2103,9 @@ def _precheck_object_store_target(
     verify_remote: bool,
     log_callback=None,
 ) -> tuple[set[str] | None, int, bool]:
-    """Generic precheck for R2 and Qiniu object stores. Returns (updated_existing_keys, confirmed_count, cache_dirty)."""
+    """Precheck R2 object store. Returns (updated_existing_keys, confirmed_count, cache_dirty)."""
+    if target_label != 'r2':
+        return existing_keys, 0, False
     if not should_precheck_pending_targets(
         skip_existing=skip_existing,
         dry_run=dry_run,
@@ -3479,98 +2116,48 @@ def _precheck_object_store_target(
         return existing_keys, 0, False
 
     cache_dirty = False
-    if target_label == 'r2':
-        prefix = config.prefix.strip('/')
-        pending_keys = [build_object_key(item.source_path, base_dir=folder, prefix=prefix, compression_strategy=item.compression_strategy) for item in pending_items]
-        if not pending_keys:
-            return existing_keys, 0, False
-        emit_message(f'正在预检待上传的 R2 对象（{len(pending_keys)} 个）...', log_callback)
-        online_keys, list_error = list_existing_keys(
-            endpoint=config.endpoint, bucket=config.bucket, prefix=prefix,
-            access_key=config.access_key or '', secret_key=config.secret_key or '',
-            region=config.region, proxy_url=config.r2_proxy, object_keys=pending_keys,
+    prefix = config.prefix.strip('/')
+    pending_keys = [
+        build_object_key(
+            item.source_path,
+            base_dir=folder,
+            prefix=prefix,
+            compression_strategy=item.compression_strategy,
         )
-        if list_error:
-            emit_message(f'R2 预检失败：{list_error}', log_callback, stream=sys.stderr)
-            raise RuntimeError(f'R2 预检失败：{list_error}')
-        existing_keys = (existing_keys or set()) | online_keys
-        files_by_key = {build_effective_object_key(p, base_dir=folder, prefix=prefix, compression=config.compression): p for p in files}
-        for object_key in online_keys:
-            path = files_by_key.get(object_key)
-            if path is None:
-                continue
-            compressed, compression_strategy = get_expected_upload_cache_semantics(path, config.compression)
-            if update_r2_cache_entry(cache_data, base_dir=folder, bucket=config.bucket,
-                                     object_key=object_key, path=path,
-                                     compressed=compressed, compression_strategy=compression_strategy):
-                cache_dirty = True
-        return existing_keys, len(online_keys), cache_dirty
-
-    # qiniu
-    prefix = config.qiniu_prefix.strip('/')
-    pending_keys = [build_object_key(item.source_path, base_dir=folder, prefix=prefix, compression_strategy=item.compression_strategy) for item in pending_items]
+        for item in pending_items
+    ]
     if not pending_keys:
         return existing_keys, 0, False
-    emit_message(f'正在预检待上传的七牛对象（{len(pending_keys)} 个）...', log_callback)
-    online_keys, list_error = list_existing_qiniu_keys(
-        config.qiniu_bucket, pending_keys,
-        config.qiniu_access_key or '', config.qiniu_secret_key or '',
+    emit_message(f'正在预检待上传的 R2 对象（{len(pending_keys)} 个）...', log_callback)
+    online_keys, list_error = list_existing_keys(
+        endpoint=config.endpoint, bucket=config.bucket, prefix=prefix,
+        access_key=config.access_key or '', secret_key=config.secret_key or '',
+        region=config.region, proxy_url=config.r2_proxy, object_keys=pending_keys,
     )
     if list_error:
-        emit_message(f'七牛预检失败：{list_error}', log_callback, stream=sys.stderr)
-        raise RuntimeError(f'七牛预检失败：{list_error}')
+        emit_message(f'R2 预检失败：{list_error}', log_callback, stream=sys.stderr)
+        raise RuntimeError(f'R2 预检失败：{list_error}')
     existing_keys = (existing_keys or set()) | online_keys
-    files_by_key = {build_effective_object_key(p, base_dir=folder, prefix=prefix, compression=config.compression): p for p in files}
+    files_by_key = {
+        build_effective_object_key(p, base_dir=folder, prefix=prefix, compression=config.compression): p
+        for p in files
+    }
     for object_key in online_keys:
         path = files_by_key.get(object_key)
         if path is None:
             continue
         compressed, compression_strategy = get_expected_upload_cache_semantics(path, config.compression)
-        if update_qiniu_cache_entry(cache_data, base_dir=folder, bucket=config.qiniu_bucket,
-                                    object_key=object_key, path=path,
-                                    compressed=compressed, compression_strategy=compression_strategy):
+        if update_r2_cache_entry(
+            cache_data,
+            base_dir=folder,
+            bucket=config.bucket,
+            object_key=object_key,
+            path=path,
+            compressed=compressed,
+            compression_strategy=compression_strategy,
+        ):
             cache_dirty = True
     return existing_keys, len(online_keys), cache_dirty
-
-
-def _precheck_linux_target(
-    pending_items: list[PlannedUpload],
-    *,
-    config: UploadRuntimeConfig,
-    folder: Path,
-    cache_data: dict,
-    skip_existing: bool,
-    dry_run: bool,
-    verify_remote: bool,
-    log_callback=None,
-) -> tuple[set[str] | None, list[tuple[Path, tuple[str, str, bool, str | None]]], int, bool, bool]:
-    """Returns (existing_linux_paths, verified_skip_results, confirmed, precheck_completed, cache_dirty)."""
-    if not should_precheck_pending_targets(
-        skip_existing=skip_existing, dry_run=dry_run, verify_remote=verify_remote,
-        cache_data=cache_data, target_label='linux',
-    ):
-        return None, [], 0, False, False
-
-    cache_dirty = False
-    try:
-        prechecked_paths, verified_skip_results, confirmed = precheck_pending_linux_items(
-            pending_items, base_dir=folder, config=config,
-        )
-    except RuntimeError as exc:
-        emit_message(format_result_message('linux', str(exc)), log_callback)
-        raise
-    for path, result in verified_skip_results:
-        remote_path = build_linux_remote_path(
-            path,
-            base_dir=folder,
-            remote_dir=config.linux_dir or '',
-            compression_strategy=result[3],
-        )
-        if update_linux_cache_entry(cache_data, base_dir=folder, host=config.linux_host or '',
-                                    remote_path=remote_path, path=path,
-                                    compressed=result[2], compression_strategy=result[3]):
-            cache_dirty = True
-    return prechecked_paths, verified_skip_results, confirmed, True, cache_dirty
 
 
 def _print_preflight_summary(
@@ -3585,22 +2172,22 @@ def _print_preflight_summary(
     *,
     log_callback=None,
 ) -> None:
+    _ = target_labels
     emit_message('========== 上传摘要 ==========', log_callback)
-    target_names = {'r2': 'R2', 'linux': 'Linux', 'qiniu': '七牛'}
-    active = [target_names[t] for t in target_labels]
-    emit_message(f'目标：{" + ".join(active)}', log_callback)
+    emit_message('目标：R2', log_callback)
     emit_message(f'模式：{"演练" if dry_run else "上传"}', log_callback)
     emit_message(f'跳过已存在文件：{"是" if skip_existing else "否"}', log_callback)
     if config.replace_remote_avif:
         emit_message('替换远端 AVIF：是', log_callback)
-    for label in target_labels:
-        name = target_names[label]
-        pending = len(pending_by_target.get(label, []))
-        cache_hits = local_cache_hits.get(label, 0)
-        remote_confirmed = remote_precheck_counts.get(label, 0)
-        existing = cache_hits + remote_confirmed
-        emit_message(f'  {name}：待处理 {pending} | 已存在 {existing}（缓存命中 {cache_hits}，远端确认 {remote_confirmed}）', log_callback)
-        emit_message(f'    旧缓存迁移：{legacy_promotions.get(label, 0)}', log_callback)
+    pending = len(pending_by_target.get('r2', []))
+    cache_hits = local_cache_hits.get('r2', 0)
+    remote_confirmed = remote_precheck_counts.get('r2', 0)
+    existing = cache_hits + remote_confirmed
+    emit_message(
+        f'  R2：待处理 {pending} | 已存在 {existing}（缓存命中 {cache_hits}，远端确认 {remote_confirmed}）',
+        log_callback,
+    )
+    emit_message(f'    旧缓存迁移：{legacy_promotions.get("r2", 0)}', log_callback)
     emit_message('=' * 32, log_callback)
 
 
@@ -3611,7 +2198,6 @@ def _format_progress(index: int, total: int, message: str) -> str:
 def run_upload(args, log_callback=None) -> int:
     _load_env_files(args)
     config = resolve_runtime_config(args)
-    normalized_target = config.target
     sync_cache_only = getattr(args, 'sync_cache_only', False)
     needs_remote_access = sync_cache_only or not args.dry_run
 
@@ -3631,9 +2217,9 @@ def run_upload(args, log_callback=None) -> int:
         emit_message(f'未在 {folder} 中找到图片文件', log_callback)
         return 0
 
-    target_labels = targets_for_mode(normalized_target)
+    target_labels = ('r2',)
     emit_message(f'在 {folder} 中共发现 {len(files)} 个图片文件', log_callback)
-    emit_message(f'目标：{" + ".join(get_target_display_name(label) for label in target_labels)}', log_callback)
+    emit_message('目标：R2', log_callback)
 
     error_msg = _validate_target_config(config, target_labels, needs_remote_access, log_callback=log_callback)
     if error_msg:
@@ -3641,13 +2227,12 @@ def run_upload(args, log_callback=None) -> int:
         return 2
 
     normalized_prefix = config.prefix.strip('/')
-    normalized_qiniu_prefix = config.qiniu_prefix.strip('/')
 
     if sync_cache_only:
         cache_snapshot = json.dumps(cache_data, sort_keys=True)
         legacy_promotions = promote_legacy_cache_entries(
             files, base_dir=folder, cache_data=cache_data, config=config,
-            target_labels=('r2', 'linux', 'qiniu'),
+            target_labels=('r2',),
         )
         exit_code = run_sync_cache_only(
             config=config, folder=folder, files=files,
@@ -3661,7 +2246,7 @@ def run_upload(args, log_callback=None) -> int:
         return exit_code
 
     skip_existing = not args.no_skip_existing
-    legacy_promotions = {'r2': 0, 'linux': 0, 'qiniu': 0}
+    legacy_promotions = {'r2': 0}
     if skip_existing and not refresh_cache:
         legacy_promotions = promote_legacy_cache_entries(
             files, base_dir=folder, cache_data=cache_data, config=config,
@@ -3675,125 +2260,81 @@ def run_upload(args, log_callback=None) -> int:
         target_labels=target_labels, cache_data=cache_data, skip_existing=skip_existing,
     )
 
-    existing_keys, existing_linux_paths, existing_linux_filenames, qiniu_existing_keys = \
-        _build_existing_sets_from_cache(
-            target_labels, files, pending_by_target, config, folder, skip_existing=skip_existing,
-        )
+    existing_keys = _build_existing_sets_from_cache(
+        target_labels, files, pending_by_target, config, folder, skip_existing=skip_existing,
+    )
 
     local_cache_hits = {
         'r2': max(0, len(existing_keys or set()) - legacy_promotions.get('r2', 0)),
-        'linux': max(0, len(existing_linux_paths or set()) - legacy_promotions.get('linux', 0)),
-        'qiniu': max(0, len(qiniu_existing_keys or set()) - legacy_promotions.get('qiniu', 0)),
     }
-    remote_precheck_counts = {'r2': 0, 'linux': 0, 'qiniu': 0}
-    verified_linux_skip_results: list[tuple[Path, tuple[str, str, bool, str | None]]] = []
-    linux_precheck_completed = False
+    remote_precheck_counts = {'r2': 0}
     verify_remote = getattr(args, 'verify_remote', False)
 
-    # --- Precheck phase ---
-    for label in target_labels:
-        pending_items = pending_by_target.get(label, [])
-        if not pending_items:
-            continue
-        if label == 'r2':
-            r2_precheck_items = [item for item in pending_items if should_skip_existing_for_planned_upload(config, item)]
-            existing_keys, confirmed, dirty = _precheck_object_store_target(
-                'r2', r2_precheck_items, config=config, folder=folder, files=files,
-                cache_data=cache_data, existing_keys=existing_keys,
-                skip_existing=skip_existing, dry_run=args.dry_run,
-                verify_remote=verify_remote, log_callback=log_callback,
-            )
-            remote_precheck_counts['r2'] = confirmed
-            cache_dirty = cache_dirty or dirty
-        elif label == 'linux':
-            try:
-                linux_precheck_items = [item for item in pending_items if should_skip_existing_for_planned_upload(config, item)]
-                prechecked_paths, verified_linux_skip_results, confirmed, linux_precheck_completed, dirty = \
-                    _precheck_linux_target(
-                        linux_precheck_items, config=config, folder=folder, cache_data=cache_data,
-                        skip_existing=skip_existing, dry_run=args.dry_run,
-                        verify_remote=verify_remote, log_callback=log_callback,
-                    )
-                if prechecked_paths:
-                    existing_linux_paths = (existing_linux_paths or set()) | prechecked_paths
-                remote_precheck_counts['linux'] = confirmed
-                cache_dirty = cache_dirty or dirty
-            except RuntimeError:
-                return 1
-        elif label == 'qiniu':
-            qiniu_precheck_items = [item for item in pending_items if should_skip_existing_for_planned_upload(config, item)]
-            qiniu_existing_keys, confirmed, dirty = _precheck_object_store_target(
-                'qiniu', qiniu_precheck_items, config=config, folder=folder, files=files,
-                cache_data=cache_data, existing_keys=qiniu_existing_keys,
-                skip_existing=skip_existing, dry_run=args.dry_run,
-                verify_remote=verify_remote, log_callback=log_callback,
-            )
-            remote_precheck_counts['qiniu'] = confirmed
-            cache_dirty = cache_dirty or dirty
+    pending_items = pending_by_target.get('r2', [])
+    if pending_items:
+        r2_precheck_items = [item for item in pending_items if should_skip_existing_for_planned_upload(config, item)]
+        existing_keys, confirmed, dirty = _precheck_object_store_target(
+            'r2', r2_precheck_items, config=config, folder=folder, files=files,
+            cache_data=cache_data, existing_keys=existing_keys,
+            skip_existing=skip_existing, dry_run=args.dry_run,
+            verify_remote=verify_remote, log_callback=log_callback,
+        )
+        remote_precheck_counts['r2'] = confirmed
+        cache_dirty = cache_dirty or dirty
 
-    # --- Preflight summary ---
     _print_preflight_summary(
         config, pending_by_target, local_cache_hits, remote_precheck_counts,
         legacy_promotions, target_labels, skip_existing, args.dry_run,
         log_callback=log_callback,
     )
 
-    # --- Build batch upload lists ---
     batch_r2_items: list[PlannedUpload] = []
     skipped_r2_results: list[tuple[Path, tuple[str, str, bool, str | None]]] = []
-    if 'r2' in target_labels:
-        for planned in pending_by_target.get('r2', []):
-            object_key = build_object_key(planned.source_path, base_dir=folder, prefix=normalized_prefix, compression_strategy=planned.compression_strategy)
-            if should_skip_existing_for_planned_upload(config, planned) and existing_keys is not None and object_key in existing_keys:
+    for planned in pending_by_target.get('r2', []):
+        object_key = build_object_key(
+            planned.source_path,
+            base_dir=folder,
+            prefix=normalized_prefix,
+            compression_strategy=planned.compression_strategy,
+        )
+        if should_skip_existing_for_planned_upload(config, planned) and existing_keys is not None and object_key in existing_keys:
+            skipped_r2_results.append(
+                (
+                    planned.source_path,
+                    (
+                        'skipped',
+                        f'跳过 {planned.source_path.name} -> s3://{config.bucket}/{object_key}',
+                        planned.compressed,
+                        planned.compression_strategy,
+                    ),
+                )
+            )
+            continue
+        batch_r2_items.append(planned)
+    if existing_keys is not None:
+        pending_r2_paths = {p.source_path for p in pending_by_target.get('r2', [])}
+        for path in files:
+            if path in pending_r2_paths:
+                continue
+            compressed, compression_strategy = get_expected_upload_cache_semantics(path, config.compression)
+            object_key = build_object_key(
+                path,
+                base_dir=folder,
+                prefix=normalized_prefix,
+                compression_strategy=compression_strategy,
+            )
+            if object_key in existing_keys:
                 skipped_r2_results.append(
-                    (planned.source_path, ('skipped', f'跳过 {planned.source_path.name} -> s3://{config.bucket}/{object_key}', planned.compressed, planned.compression_strategy))
-                )
-                continue
-            batch_r2_items.append(planned)
-        # Also count files that were fully excluded by cache (not in pending_by_target at all)
-        if existing_keys is not None:
-            pending_r2_paths = {p.source_path for p in pending_by_target.get('r2', [])}
-            for path in files:
-                if path in pending_r2_paths:
-                    continue
-                compressed, compression_strategy = get_expected_upload_cache_semantics(path, config.compression)
-                object_key = build_object_key(path, base_dir=folder, prefix=normalized_prefix, compression_strategy=compression_strategy)
-                if object_key in existing_keys:
-                    skipped_r2_results.append(
-                        (path, ('skipped', f'跳过 {path.name} -> s3://{config.bucket}/{object_key}', compressed, compression_strategy))
+                    (
+                        path,
+                        (
+                            'skipped',
+                            f'跳过 {path.name} -> s3://{config.bucket}/{object_key}',
+                            compressed,
+                            compression_strategy,
+                        ),
                     )
-
-    batch_linux_items: list[PlannedUpload] = []
-    if 'linux' in target_labels:
-        for planned in pending_by_target.get('linux', []):
-            remote_path = build_linux_remote_path(planned.source_path, base_dir=folder, remote_dir=config.linux_dir or '', compression_strategy=planned.compression_strategy)
-            if should_skip_existing_for_planned_upload(config, planned) and existing_linux_paths is not None and remote_path in existing_linux_paths:
-                continue
-            batch_linux_items.append(planned)
-
-    batch_qiniu_items: list[PlannedUpload] = []
-    skipped_qiniu_results: list[tuple[Path, tuple[str, str, bool, str | None]]] = []
-    if 'qiniu' in target_labels:
-        for planned in pending_by_target.get('qiniu', []):
-            object_key = build_object_key(planned.source_path, base_dir=folder, prefix=normalized_qiniu_prefix, compression_strategy=planned.compression_strategy)
-            if should_skip_existing_for_planned_upload(config, planned) and qiniu_existing_keys is not None and object_key in qiniu_existing_keys:
-                skipped_qiniu_results.append(
-                    (planned.source_path, ('skipped', f'跳过 {planned.source_path.name} -> qiniu://{config.qiniu_bucket}/{object_key}', planned.compressed, planned.compression_strategy))
                 )
-                continue
-            batch_qiniu_items.append(planned)
-        # Also count files that were fully excluded by cache
-        if qiniu_existing_keys is not None:
-            pending_qiniu_paths = {p.source_path for p in pending_by_target.get('qiniu', [])}
-            for path in files:
-                if path in pending_qiniu_paths:
-                    continue
-                compressed, compression_strategy = get_expected_upload_cache_semantics(path, config.compression)
-                object_key = build_object_key(path, base_dir=folder, prefix=normalized_qiniu_prefix, compression_strategy=compression_strategy)
-                if object_key in qiniu_existing_keys:
-                    skipped_qiniu_results.append(
-                        (path, ('skipped', f'跳过 {path.name} -> qiniu://{config.qiniu_bucket}/{object_key}', compressed, compression_strategy))
-                    )
 
     counters = {'uploaded': 0, 'skipped': 0, 'dry-run': 0, 'failed': 0}
     catalog_items_by_path: dict[str, dict] = {}
@@ -3805,19 +2346,11 @@ def run_upload(args, log_callback=None) -> int:
         target_label: str, status: str, path: Path | None, *,
         compressed: bool = False, compression_strategy: str | None = None,
     ) -> bool:
-        if path is None:
+        if path is None or target_label != 'r2' or status != 'uploaded':
             return False
-        target_id: str | None = None
-        if target_label == 'r2' and status == 'uploaded':
-            target_id = get_target_cache_id('r2', path, base_dir=folder, config=config)
-        elif target_label == 'linux' and status in {'uploaded', 'skipped'}:
-            target_id = get_target_cache_id('linux', path, base_dir=folder, config=config)
-        elif target_label == 'qiniu' and status == 'uploaded':
-            target_id = get_target_cache_id('qiniu', path, base_dir=folder, config=config)
-        if target_id is None:
-            return False
+        target_id = get_target_cache_id('r2', path, base_dir=folder, config=config)
         dirty = apply_target_result_to_cache(
-            cache_data, path, base_dir=folder, target_label=target_label,
+            cache_data, path, base_dir=folder, target_label='r2',
             target_id=target_id, status=status,
             compressed=compressed, compression_strategy=compression_strategy,
         )
@@ -3829,14 +2362,18 @@ def run_upload(args, log_callback=None) -> int:
                 record = get_file_cache_record(cache_data, relative_path)
                 if compression_strategy == PNG_COMPRESSION_STRATEGY:
                     previous = record.get('prepared_png') if isinstance(record, dict) else None
-                    record_prepared_png_metadata(cache_data, path, base_dir=folder, sha256=sha256,
-                                                  compression_strategy=compression_strategy, prepared_path=prepared_path)
+                    record_prepared_png_metadata(
+                        cache_data, path, base_dir=folder, sha256=sha256,
+                        compression_strategy=compression_strategy, prepared_path=prepared_path,
+                    )
                     current = get_file_cache_record(cache_data, relative_path).get('prepared_png')
                 else:
                     artifacts = record.get('prepared_artifacts') if isinstance(record.get('prepared_artifacts'), dict) else {}
                     previous = artifacts.get(compression_strategy)
-                    record_prepared_upload_metadata(cache_data, path, base_dir=folder, sha256=sha256,
-                                                    compression_strategy=compression_strategy, prepared_path=prepared_path)
+                    record_prepared_upload_metadata(
+                        cache_data, path, base_dir=folder, sha256=sha256,
+                        compression_strategy=compression_strategy, prepared_path=prepared_path,
+                    )
                     current = get_file_cache_record(cache_data, relative_path).get('prepared_artifacts', {}).get(compression_strategy)
                 if current != previous:
                     dirty = True
@@ -3890,17 +2427,6 @@ def run_upload(args, log_callback=None) -> int:
             if delete_status == 'failed':
                 counters['failed'] += 1
 
-    # --- Execute uploads ---
-    if args.dry_run and batch_linux_items:
-        target_str = f'{config.linux_user}@{config.linux_host}'
-        for i, item in enumerate(batch_linux_items, 1):
-            remote_path = build_linux_remote_path(item.source_path, base_dir=folder, remote_dir=config.linux_dir or '', compression_strategy=item.compression_strategy)
-            msg = _format_progress(i, len(batch_linux_items),
-                                   f'演练 {item.source_path.name} -> {target_str}:{remote_path}')
-            emit_message(format_result_message('linux', msg), log_callback)
-            counters['dry-run'] += 1
-        batch_linux_items = []
-
     if batch_r2_items:
         emit_message(f'开始上传到 R2（{len(batch_r2_items)} 个文件）...', log_callback)
         for i, (item, result) in enumerate(upload_pending_r2_files(
@@ -3917,47 +2443,9 @@ def run_upload(args, log_callback=None) -> int:
             progress_result = (result[0], progress_msg, *result[2:]) if len(result) >= 4 else (result[0], progress_msg)
             record_result('r2', path, progress_result, emit_skipped=args.dry_run)
 
-    if batch_linux_items:
-        emit_message(f'开始上传到 Linux（{len(batch_linux_items)} 个文件）...', log_callback)
-        for i, (item, result) in enumerate(upload_pending_linux_files(
-            batch_linux_items, base_dir=folder,
-            remote_dir=config.linux_dir or '', host=config.linux_host or '',
-            user=config.linux_user or '', ssh_key=config.linux_key,
-            password=config.linux_password, port=config.linux_port,
-            proxy_url=config.linux_proxy,
-            **batch_compression_kwargs,
-            **batch_log_kwargs,
-        ), 1):
-            path = item.source_path if isinstance(item, PlannedUpload) else item
-            progress_msg = _format_progress(i, len(batch_linux_items), result[1])
-            progress_result = (result[0], progress_msg, *result[2:]) if len(result) >= 4 else (result[0], progress_msg)
-            record_result('linux', path, progress_result, emit_skipped=args.dry_run)
-    # --- Record Linux precheck skip results (outside batch block) ---
-    for path, result in verified_linux_skip_results:
-        record_result('linux', path, result, emit_skipped=args.dry_run)
-
-    if batch_qiniu_items:
-        emit_message(f'开始上传到七牛（{len(batch_qiniu_items)} 个文件）...', log_callback)
-        for i, (item, result) in enumerate(upload_pending_qiniu_files(
-            batch_qiniu_items, base_dir=folder,
-            bucket=config.qiniu_bucket, prefix=normalized_qiniu_prefix,
-            access_key=config.qiniu_access_key or '', secret_key=config.qiniu_secret_key or '',
-            dry_run=args.dry_run, skip_existing=False, existing_keys=None,
-            **batch_compression_kwargs,
-            **batch_log_kwargs,
-        ), 1):
-            path = item.source_path if isinstance(item, PlannedUpload) else item
-            progress_msg = _format_progress(i, len(batch_qiniu_items), result[1])
-            progress_result = (result[0], progress_msg, *result[2:]) if len(result) >= 4 else (result[0], progress_msg)
-            record_result('qiniu', path, progress_result, emit_skipped=args.dry_run)
-
-    # --- Record cached skip results ---
     for path, result in skipped_r2_results:
         record_result('r2', path, result, emit_skipped=args.dry_run)
-    for path, result in skipped_qiniu_results:
-        record_result('qiniu', path, result, emit_skipped=args.dry_run)
 
-    # --- Finalize ---
     if cache_dirty:
         save_upload_cache(cache_file, cache_data)
 
@@ -4070,11 +2558,10 @@ class ChineseArgumentParser(argparse.ArgumentParser):
         self.add_argument('-h', '--help', action='help', default=argparse.SUPPRESS, help='显示此帮助信息并退出')
 
 
-
 def build_parser() -> argparse.ArgumentParser:
     parser = ChineseArgumentParser(
         description=(
-            '上传本地图片到远端（默认仅 R2；可选 Linux / 七牛）。'
+            '上传本地图片到 Cloudflare R2。'
             '成功后可合并更新 photos-index.json：'
             '本机用 --catalog / PHOTO_CATALOG_PATH；'
             '脚本与 API 不在同一机时用 --catalog-remote / PHOTO_CATALOG_REMOTE_PATH + LINUX SSH（只传 JSON，不传图）。'
@@ -4103,9 +2590,9 @@ def build_parser() -> argparse.ArgumentParser:
     common_group.add_argument('--replace-remote-avif', action='store_true', help='即使同路径 AVIF 已存在也重新上传，用于替换旧有损 AVIF。')
     common_group.add_argument(
         '--target',
-        choices=('r2', 'linux', 'qiniu', 'all', 'both'),
+        choices=('r2',),
         default='r2',
-        help='上传目标，默认 r2（图上 R2）。both/all 仍可显式启用多目标。',
+        help='上传目标，仅支持 r2（兼容后端/脚本传参）。',
     )
     common_group.add_argument(
         '--catalog',
@@ -4121,7 +2608,7 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             '远端服务器上的 photos-index.json 路径（SFTP）。'
             '脚本与 API 不在同一机时使用；需 LINUX_UPLOAD_HOST/USER + KEY 或 PASSWORD。'
-            '未传时使用 PHOTO_CATALOG_REMOTE_PATH。默认不上传图片到 Linux。'
+            '未传时使用 PHOTO_CATALOG_REMOTE_PATH。不会上传图片到 Linux。'
         ),
     )
     common_group.add_argument(
@@ -4142,18 +2629,13 @@ def build_parser() -> argparse.ArgumentParser:
     r2_group.add_argument('--region', default=None, help='签名区域，默认 auto。')
     r2_group.add_argument('--r2-proxy', default=None, help='R2 请求代理地址，例如 http://127.0.0.1:7890。')
 
-    linux_group = parser.add_argument_group('Linux 参数')
-    linux_group.add_argument('--linux-host', default=None, help='Linux 服务器主机名或 IP。')
-    linux_group.add_argument('--linux-user', default=None, help='Linux 服务器 SSH 用户名。')
-    linux_group.add_argument('--linux-dir', default=None, help='Linux 服务器目标目录。')
-    linux_group.add_argument('--linux-key', default=None, help='Linux 上传使用的 SSH 私钥路径。')
-    linux_group.add_argument('--linux-password', default=None, help='Linux 上传使用的 SSH 密码。')
-    linux_group.add_argument('--linux-port', type=int, default=None, help='Linux 上传使用的 SSH 端口，默认 22。')
-    linux_group.add_argument('--linux-proxy', default=None, help='Linux 上传代理地址，例如 socks5://127.0.0.1:1080。')
-
-    qiniu_group = parser.add_argument_group('七牛参数')
-    qiniu_group.add_argument('--qiniu-bucket', default=None, help='七牛桶名称，默认取 QINIU_BUCKET 或 --bucket。')
-    qiniu_group.add_argument('--qiniu-prefix', default=None, help='七牛对象键前缀，默认取 QINIU_PREFIX 或 --prefix。')
+    linux_group = parser.add_argument_group('目录远程 SSH 参数（仅 photos-index.json）')
+    linux_group.add_argument('--linux-host', default=None, help='远程目录服务器主机名或 IP。')
+    linux_group.add_argument('--linux-user', default=None, help='远程目录服务器 SSH 用户名。')
+    linux_group.add_argument('--linux-key', default=None, help='远程目录合并使用的 SSH 私钥路径。')
+    linux_group.add_argument('--linux-password', default=None, help='远程目录合并使用的 SSH 密码。')
+    linux_group.add_argument('--linux-port', type=int, default=None, help='SSH 端口，默认 22。')
+    linux_group.add_argument('--linux-proxy', default=None, help='SSH 代理地址，例如 socks5://127.0.0.1:1080。')
 
     return parser
 

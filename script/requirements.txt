@@ -2,4 +2,3 @@ boto3
 paramiko
 PySide6
 PySocks
-qiniu

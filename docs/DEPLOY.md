@@ -251,10 +251,10 @@ Prefer `sha-*` when you need a pin; use `latest` or `./scripts/deploy.sh` for ro
 
 - Backend image includes PHP + Apache, Python, and `upload_r2.py` so upload works inside the container.
 - Frontend does **not** embed API secrets; only the backend needs `upload_r2.env`. Never commit real `upload_r2.env`, tokens, or runtime catalogs into git.
-- Upload path: image bytes go to **R2 only** by default (`--target r2`).
+- Upload path: image bytes always go to **R2 only** (`--target r2`).
 - `photos-index.json` updates:
   - **Same machine as API**: set `PHOTO_CATALOG_PATH` / `--catalog` (local merge).
-  - **Script on another machine**: set `PHOTO_CATALOG_REMOTE_PATH` / `--catalog-remote` plus `LINUX_UPLOAD_HOST`/`USER` and key or password — script SFTP-merges only the JSON (does **not** upload images to Linux unless `--target` includes linux).
+  - **Script on another machine**: set `PHOTO_CATALOG_REMOTE_PATH` / `--catalog-remote` plus `LINUX_UPLOAD_HOST`/`USER` and key or password — script SFTP-merges only the JSON (does **not** upload images to Linux (images always go to R2)).
 - Web upload injects local `PHOTO_CATALOG_PATH` inside the API container.
 - The server only stores `photos-index.json` and temporary upload batches (no permanent local image store).
 

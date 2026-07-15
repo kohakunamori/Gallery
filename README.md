@@ -133,7 +133,7 @@ cp script/.env.example script/upload_r2.env
 python script/upload_r2.py /path/to/photos
 ```
 
-Defaults: target **R2 only**, AVIF compression, skip already-uploaded objects. Catalog merge is optional via `PHOTO_CATALOG_PATH` (local) or `PHOTO_CATALOG_REMOTE_PATH` (SFTP merge only — does not upload image files to Linux unless `--target` includes `linux`).
+Defaults: **R2 only**, AVIF compression, skip already-uploaded objects. Catalog merge is optional via `PHOTO_CATALOG_PATH` (local) or `PHOTO_CATALOG_REMOTE_PATH` (SFTP merge only — does not upload image files to Linux (images always go to R2)).
 
 Import an existing R2 bucket into a catalog:
 
