@@ -10,6 +10,29 @@ import upload_r2
 from upload_r2 import DEFAULT_BUCKET, DEFAULT_ENDPOINT, DEFAULT_PREFIX, resolve_runtime_config
 
 
+class OfflinePendingCatalogMixin:
+    """Route durable pending-catalog writes into a temp path so suite stays offline/local."""
+
+    def setUp(self):
+        super().setUp()
+        self._offline_pending_tmpdir = TemporaryDirectory()
+        pending_path = Path(self._offline_pending_tmpdir.name) / '.upload_pending_catalog.json'
+        pending_patch = patch.object(upload_r2, 'get_pending_catalog_file_path', return_value=pending_path)
+        pending_patch.start()
+        self.addCleanup(pending_patch.stop)
+        self.addCleanup(self._offline_pending_tmpdir.cleanup)
+
+
+class OfflineRemoteVerifyMixin(OfflinePendingCatalogMixin):
+    """Also stub gallery existing-photos API used by Linux verify_remote precheck."""
+
+    def setUp(self):
+        super().setUp()
+        list_patch = patch.object(upload_r2, 'list_existing_linux_filenames', return_value=(set(), None))
+        list_patch.start()
+        self.addCleanup(list_patch.stop)
+
+
 class CacheSectionHelperTests(unittest.TestCase):
     def test_get_legacy_target_sections_returns_normalized_three_section_mapping(self):
         legacy_targets = {
@@ -421,6 +444,26 @@ class CachePathOverrideTests(unittest.TestCase):
             self.assertEqual(Path(temp_dir) / 'target-cache.json', upload_r2.get_cache_file_path())
             self.assertEqual(Path(temp_dir) / 'prepared-cache', upload_r2.get_prepared_cache_dir())
 
+    def test_pending_catalog_path_prefers_env_then_cache_dir_sibling(self):
+        with TemporaryDirectory() as temp_dir:
+            explicit = Path(temp_dir) / 'pending.json'
+            cache_file = Path(temp_dir) / 'nested' / 'target-cache.json'
+            with patch.dict(os.environ, {
+                'UPLOAD_PENDING_CATALOG_FILE': str(explicit),
+            }, clear=False):
+                self.assertEqual(explicit.resolve(), upload_r2.get_pending_catalog_file_path())
+
+            env = {
+                'UPLOAD_TARGET_CACHE_FILE': str(cache_file),
+            }
+            # Ensure explicit pending env does not leak from other tests.
+            with patch.dict(os.environ, env, clear=False):
+                os.environ.pop('UPLOAD_PENDING_CATALOG_FILE', None)
+                self.assertEqual(
+                    cache_file.resolve().with_name(upload_r2.PENDING_CATALOG_FILE_NAME),
+                    upload_r2.get_pending_catalog_file_path(),
+                )
+
 
 class EnvFileLoadingTests(unittest.TestCase):
     def test_default_candidates_prefer_script_directory_upload_r2_env(self):
@@ -565,7 +608,7 @@ class PendingCatalogQueueTests(unittest.TestCase):
             self.assertEqual(['missed.avif'], [entry['path'] for entry in payload['items']])
 
 
-class PhotoCatalogAndExistingApiTests(unittest.TestCase):
+class PhotoCatalogAndExistingApiTests(OfflinePendingCatalogMixin, unittest.TestCase):
     def test_existing_photos_api_defaults_to_r2_media_source(self):
         self.assertIn('mediaSource=r2', upload_r2.EXISTING_PHOTOS_API_URL)
         self.assertEqual(upload_r2.EXISTING_PHOTOS_API_URL, upload_r2.LINUX_EXISTING_PHOTOS_API_URL)
@@ -1964,7 +2007,7 @@ class LinuxBatchPendingUploadTests(unittest.TestCase):
         )
 
 
-class PendingUploadPlanningTests(unittest.TestCase):
+class PendingUploadPlanningTests(OfflineRemoteVerifyMixin, unittest.TestCase):
     def make_args(self, **overrides):
         values = {
             'dir': None,
@@ -3476,7 +3519,7 @@ class PendingUploadPlanningTests(unittest.TestCase):
         self.assertNotIn('show this help message and exit', help_text)
 
 
-class RunUploadCacheWriteRegressionTests(unittest.TestCase):
+class RunUploadCacheWriteRegressionTests(OfflinePendingCatalogMixin, unittest.TestCase):
     def make_args(self, **overrides):
         values = {
             'dir': None,
@@ -3647,7 +3690,7 @@ class TargetResultCacheUpdateTests(unittest.TestCase):
         self.assertNotIn('linux', cache_data['files']['image.png']['targets'])
 
 
-class RunUploadSyncCacheOnlyTests(unittest.TestCase):
+class RunUploadSyncCacheOnlyTests(OfflinePendingCatalogMixin, unittest.TestCase):
     def make_args(self, **overrides):
         values = {
             'dir': None,
@@ -4003,7 +4046,7 @@ class UploadToR2SourceMtimeMetadataTests(unittest.TestCase):
         self.assertEqual(upload_body, second_call['Body'])
 
 
-class RunUploadPreparedPngMetadataTests(unittest.TestCase):
+class RunUploadPreparedPngMetadataTests(OfflinePendingCatalogMixin, unittest.TestCase):
     def make_args(self, **overrides):
         values = {
             'dir': None,
@@ -4717,7 +4760,7 @@ if __name__ == '__main__':
     unittest.main()
 
 
-class AvifDefaultBehaviorTests(unittest.TestCase):
+class AvifDefaultBehaviorTests(OfflinePendingCatalogMixin, unittest.TestCase):
     def test_resolve_runtime_config_defaults_to_avif_lossless(self):
         args = SimpleNamespace(target='r2')
 
