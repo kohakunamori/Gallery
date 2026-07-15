@@ -26,7 +26,8 @@ export function readSelectedPhotoId(search?: string): string | null {
 /**
  * Write or clear `photo` on the current URL via History API.
  * Preserves path, other query keys, and hash.
- * Defaults to `replaceState` so open/prev/next/close do not spam history.
+ * Defaults to `replaceState` (next/prev/close, re-open while already open).
+ * Callers use `mode: 'push'` when first opening the viewer so Back can close it.
  */
 export function writeSelectedPhotoId(
   photoId: string | null,

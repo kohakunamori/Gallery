@@ -12,8 +12,10 @@ import {
   getVisibleGalleryMediaSourcePreferences,
   isGalleryMediaSourceVisible,
 } from '../../utils/gallerySettings';
+import type { GalleryThemePreference } from '../../utils/galleryTheme';
 import { getVisibleInitialFocusElement, trapTabKey } from '../../utils/dialogFocus';
 import type { MediaSourceStatus } from '../../services/mediaSources';
+import { t } from '../../i18n';
 
 function getIsDesktopViewport() {
   if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
@@ -29,32 +31,39 @@ type GallerySettingsModalProps = {
   columnPreference: GalleryColumnPreference;
   sortPreference: GallerySortPreference;
   mediaSourcePreference: GalleryMediaSourcePreference;
+  themePreference: GalleryThemePreference;
   mediaSourceStatuses: MediaSourceStatus[];
   onSelectColumnPreference: (value: GalleryColumnPreference) => void;
   onSelectSortPreference: (value: GallerySortPreference) => void;
   onSelectMediaSourcePreference: (value: GalleryMediaSourcePreference) => void;
+  onSelectThemePreference: (value: GalleryThemePreference) => void;
   onClose: () => void;
 };
 
 const sortOptions: Array<{ value: GallerySortPreference; label: string }> = [
-  { value: 'newest', label: 'Newest first' },
-  { value: 'oldest', label: 'Oldest first' },
-  { value: 'filename-asc', label: 'Filename A–Z' },
-  { value: 'filename-desc', label: 'Filename Z–A' },
-  { value: 'random', label: 'Random order' },
+  { value: 'newest', label: t('settings.sort.newest') },
+  { value: 'oldest', label: t('settings.sort.oldest') },
+  { value: 'filename-asc', label: t('settings.sort.filenameAsc') },
+  { value: 'filename-desc', label: t('settings.sort.filenameDesc') },
+  { value: 'random', label: t('settings.sort.random') },
+];
+const themeOptions: Array<{ value: GalleryThemePreference; label: string }> = [
+  { value: 'system', label: t('settings.theme.system') },
+  { value: 'light', label: t('settings.theme.light') },
+  { value: 'dark', label: t('settings.theme.dark') },
 ];
 const mediaSourceLabels: Record<GalleryMediaSourcePreference, string> = {
-  auto: 'Auto',
-  r2: 'R2',
-  qiniu: 'Qiniu',
-  local: 'Server local',
+  auto: t('settings.media.auto'),
+  r2: t('settings.media.r2'),
+  qiniu: t('settings.media.qiniu'),
+  local: t('settings.media.local'),
 };
 const DEFAULT_QINIU_QUOTA_BYTES = 10 * 1024 * 1024 * 1024;
 
 function SelectedIcon() {
   return (
     <span
-      className="inline-flex h-5 w-5 scale-100 items-center justify-center rounded-full bg-white/82 text-primary shadow-[0_1px_3px_rgba(15,23,42,0.08)] transition-all duration-300 md:h-4 md:w-4 md:bg-primary/16 md:shadow-none"
+      className="settings-selected-icon inline-flex h-5 w-5 scale-100 items-center justify-center rounded-full text-primary transition-all duration-300 md:h-4 md:w-4"
       aria-hidden="true"
     >
       <svg viewBox="0 0 16 16" className="h-3.5 w-3.5 fill-none stroke-current stroke-[2.2] md:h-3 md:w-3">
@@ -67,10 +76,10 @@ function SelectedIcon() {
 function getOptionButtonClasses(isSelected: boolean, isDisabled = false) {
   return `inline-flex min-h-14 items-center justify-center rounded-[20px] border px-4 text-center text-base font-medium transition-all duration-300 active:scale-[0.985] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 md:min-h-12 md:rounded-2xl md:text-sm md:active:scale-100 ${
     isDisabled
-      ? 'cursor-not-allowed border-white/35 bg-white/30 text-on-surface-variant opacity-60 shadow-none hover:bg-white/30 md:border-transparent md:bg-surface-container-low'
+      ? 'settings-option-disabled cursor-not-allowed text-on-surface-variant opacity-60'
       : isSelected
-        ? 'scale-[1.01] border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(244,248,255,0.92))] text-primary shadow-[0_14px_34px_rgba(15,23,42,0.12)] ring-1 ring-white/60 md:scale-100 md:border-primary/30 md:bg-primary/14 md:ring-primary/10'
-        : 'border-white/45 bg-white/50 text-on-surface shadow-[0_6px_18px_rgba(15,23,42,0.05)] hover:bg-white/70 md:border-transparent md:bg-surface-container md:shadow-none md:hover:bg-surface-container-high'
+        ? 'settings-option-selected scale-[1.01] text-primary ring-1 md:scale-100'
+        : 'settings-option text-on-surface md:hover:bg-surface-container-high'
   }`;
 }
 
@@ -88,7 +97,7 @@ function renderOptionContent(label: string, isSelected: boolean) {
 }
 
 function getSectionCardClasses() {
-  return 'space-y-3 rounded-[22px] border border-white/55 bg-[linear-gradient(180deg,rgba(255,255,255,0.72),rgba(248,250,255,0.52))] p-3 shadow-[0_10px_28px_rgba(15,23,42,0.06)] backdrop-blur-xl md:rounded-none md:border-none md:bg-transparent md:p-0 md:shadow-none md:backdrop-blur-none';
+  return 'settings-section-card space-y-3 rounded-[22px] border p-3 backdrop-blur-xl md:rounded-none md:border-none md:bg-transparent md:p-0 md:shadow-none md:backdrop-blur-none';
 }
 
 function formatGigabytes(bytes: number) {
@@ -111,10 +120,12 @@ export function GallerySettingsModal({
   columnPreference,
   sortPreference,
   mediaSourcePreference,
+  themePreference,
   mediaSourceStatuses,
   onSelectColumnPreference,
   onSelectSortPreference,
   onSelectMediaSourcePreference,
+  onSelectThemePreference,
   onClose,
 }: GallerySettingsModalProps) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
@@ -211,7 +222,7 @@ export function GallerySettingsModal({
       className="dialog-backdrop-enter fixed inset-0 z-50 flex items-end justify-center overflow-y-auto overscroll-contain bg-black/28 px-0 pt-[max(0.75rem,env(safe-area-inset-top))] text-on-surface backdrop-blur-xl sm:pt-[max(1rem,env(safe-area-inset-top))] md:items-center md:bg-black/35 md:px-8 md:py-6 md:backdrop-blur-md"
       role="dialog"
       aria-modal="true"
-      aria-label="Gallery settings"
+      aria-label={t('settings.title')}
       tabIndex={-1}
       onClick={handleBackdropClick}
       onKeyDown={handleKeyDown}
@@ -219,26 +230,26 @@ export function GallerySettingsModal({
       data-motion="dialog-backdrop"
     >
       <div
-        className="dialog-sheet-enter flex max-h-[calc(100vh-max(0.75rem,env(safe-area-inset-top))-0.5rem)] max-h-[calc(100dvh-max(0.75rem,env(safe-area-inset-top))-0.5rem)] w-full flex-col overflow-hidden rounded-t-[28px] border border-white/45 bg-[linear-gradient(180deg,rgba(255,255,255,0.88),rgba(248,250,255,0.78))] shadow-[0_24px_80px_rgba(15,23,42,0.18)] backdrop-blur-3xl sm:max-h-[calc(100vh-max(1rem,env(safe-area-inset-top))-0.75rem)] sm:max-h-[calc(100dvh-max(1rem,env(safe-area-inset-top))-0.75rem)] sm:rounded-t-[30px] md:max-h-[calc(100dvh-3rem)] md:max-w-md md:rounded-[28px] md:border-transparent md:bg-surface/95 md:backdrop-blur-2xl"
+        className="settings-sheet dialog-sheet-enter flex max-h-[calc(100vh-max(0.75rem,env(safe-area-inset-top))-0.5rem)] max-h-[calc(100dvh-max(0.75rem,env(safe-area-inset-top))-0.5rem)] w-full flex-col overflow-hidden rounded-t-[28px] border backdrop-blur-3xl sm:max-h-[calc(100vh-max(1rem,env(safe-area-inset-top))-0.75rem)] sm:max-h-[calc(100dvh-max(1rem,env(safe-area-inset-top))-0.75rem)] sm:rounded-t-[30px] md:max-h-[calc(100dvh-3rem)] md:max-w-md md:rounded-[28px] md:backdrop-blur-2xl"
         onClick={(event) => event.stopPropagation()}
         data-motion="dialog-sheet"
       >
         <div className="flex justify-center px-4 pb-1.5 pt-2.5 sm:pb-2 sm:pt-3 md:hidden">
-          <div className="h-1.5 w-11 rounded-full bg-black/12 shadow-[inset_0_1px_1px_rgba(255,255,255,0.55)]" aria-hidden="true" />
+          <div className="settings-handle h-1.5 w-11 rounded-full shadow-[inset_0_1px_1px_rgba(255,255,255,0.55)]" aria-hidden="true" />
         </div>
 
         <div className="flex items-start justify-between gap-3 px-4 pb-3 pt-1 sm:gap-4 sm:pb-4 md:mb-6 md:p-6 md:pb-0">
           <div className="min-w-0 space-y-1.5 sm:space-y-2">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-on-surface-variant">Display</p>
-            <h2 className="font-headline text-xl text-on-surface md:text-2xl">Gallery settings</h2>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-on-surface-variant">{t('settings.display')}</p>
+            <h2 className="font-headline text-xl text-on-surface md:text-2xl">{t('settings.title')}</h2>
             <p className="text-xs leading-5 text-on-surface-variant sm:text-sm sm:leading-6">
-              Choose how many columns the waterfall uses while keeping the presentation stable.
+              {t('settings.description')}
             </p>
           </div>
           <button
             ref={desktopCloseButtonRef}
             type="button"
-            aria-label="Close gallery settings"
+            aria-label={t('settings.closeAria')}
             onClick={onClose}
             data-settings-close="desktop"
             tabIndex={isDesktopViewport ? undefined : -1}
@@ -250,7 +261,29 @@ export function GallerySettingsModal({
 
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-3 pb-3 pt-1 sm:space-y-5 sm:px-4 sm:pb-4 md:space-y-6 md:px-6 md:pb-6">
           <div className={getSectionCardClasses()}>
-            <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-on-surface-variant">Sort order</p>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-on-surface-variant">{t('settings.theme')}</p>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              {themeOptions.map((option) => {
+                const isSelected = option.value === themePreference;
+
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    aria-pressed={isSelected}
+                    onClick={() => onSelectThemePreference(option.value)}
+                    className={getOptionButtonClasses(isSelected)}
+                    data-testid={`theme-option-${option.value}`}
+                  >
+                    {renderOptionContent(option.label, isSelected)}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className={getSectionCardClasses()}>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-on-surface-variant">{t('settings.sortOrder')}</p>
             <div className="grid gap-3 sm:grid-cols-2">
               {sortOptions.map((option) => {
                 const isSelected = option.value === sortPreference;
@@ -271,7 +304,7 @@ export function GallerySettingsModal({
           </div>
 
           <div className={getSectionCardClasses()}>
-            <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-on-surface-variant">Media source</p>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-on-surface-variant">{t('settings.mediaSource')}</p>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               {visibleMediaSourceOptions.map((option) => {
                 const isSelected = option.value === mediaSourcePreference;
@@ -293,18 +326,18 @@ export function GallerySettingsModal({
               })}
             </div>
             {qiniuStatus !== undefined && (
-              <div className="rounded-2xl border border-white/45 bg-white/45 px-4 py-3 text-sm text-on-surface-variant">
-                <p className="text-xs text-on-surface-variant">Auto uses the default remote fallback order. Server local stays manual only.</p>
+              <div className="settings-soft-panel rounded-2xl border px-4 py-3 text-sm text-on-surface-variant">
+                <p className="text-xs text-on-surface-variant">{t('settings.qiniu.autoHint')}</p>
                 <div className="mt-3 flex items-center justify-between gap-4 text-on-surface">
-                  <span className="font-medium">Qiniu monthly traffic</span>
+                  <span className="font-medium">{t('settings.qiniu.traffic')}</span>
                   <span>
                     {formatGigabytes(qiniuUsedBytes)} / {formatGigabytes(qiniuQuotaBytes)} GB
                   </span>
                 </div>
                 <div
-                  className="mt-3 h-2 overflow-hidden rounded-full bg-black/8"
+                  className="settings-usage-track mt-3 h-2 overflow-hidden rounded-full"
                   role="progressbar"
-                  aria-label="Qiniu monthly traffic usage"
+                  aria-label={t('settings.qiniu.trafficUsage')}
                   aria-valuemin={0}
                   aria-valuemax={100}
                   aria-valuenow={qiniuUsagePercentRounded}
@@ -316,14 +349,14 @@ export function GallerySettingsModal({
                   />
                 </div>
                 <p className="mt-2 text-xs text-on-surface-variant">
-                  {qiniuStatus.message ?? (qiniuStatus.isDisabled ? 'Qiniu is unavailable.' : 'Qiniu is available.')}
+                  {qiniuStatus.message ?? (qiniuStatus.isDisabled ? t('settings.qiniu.unavailable') : t('settings.qiniu.available'))}
                 </p>
               </div>
             )}
           </div>
 
           <div className={getSectionCardClasses()}>
-            <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-on-surface-variant">Waterfall columns</p>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-on-surface-variant">{t('settings.waterfallColumns')}</p>
             <div className="space-y-3">
               <button
                 type="button"
@@ -331,20 +364,20 @@ export function GallerySettingsModal({
                 onClick={() => onSelectColumnPreference('auto')}
                 className={`w-full ${getOptionButtonClasses(columnPreference === 'auto')}`}
               >
-                {renderOptionContent('Auto', columnPreference === 'auto')}
+                {renderOptionContent(t('settings.columns.auto'), columnPreference === 'auto')}
               </button>
-              <div className="rounded-[20px] border border-white/45 bg-white/50 p-3 shadow-[0_6px_18px_rgba(15,23,42,0.05)] md:rounded-2xl md:border-transparent md:bg-surface-container md:shadow-none">
+              <div className="settings-soft-panel rounded-[20px] border p-3 md:rounded-2xl">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div className="min-w-0">
-                    <p className="text-sm font-medium text-on-surface">Fixed columns</p>
+                    <p className="text-sm font-medium text-on-surface">{t('settings.columns.fixed')}</p>
                     <p className="text-xs text-on-surface-variant">
-                      Choose a fixed count from {MIN_GALLERY_COLUMN_COUNT} to {MAX_GALLERY_COLUMN_COUNT}.
+                      {t('settings.columns.fixedHint', { min: MIN_GALLERY_COLUMN_COUNT, max: MAX_GALLERY_COLUMN_COUNT })}
                     </p>
                   </div>
                   <div className="flex items-center gap-2 self-end sm:self-auto">
                     <button
                       type="button"
-                      aria-label="Decrease waterfall columns"
+                      aria-label={t('settings.columns.decrease')}
                       disabled={currentFixedColumnCount <= MIN_GALLERY_COLUMN_COUNT}
                       onClick={decreaseColumnCount}
                       className={getOptionButtonClasses(false, currentFixedColumnCount <= MIN_GALLERY_COLUMN_COUNT)}
@@ -353,14 +386,14 @@ export function GallerySettingsModal({
                     </button>
                     <output
                       aria-live="polite"
-                      aria-label="Selected waterfall column count"
-                      className="inline-flex min-h-14 min-w-16 items-center justify-center rounded-[20px] border border-white/55 bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(244,248,255,0.92))] px-4 text-base font-semibold text-primary shadow-[0_14px_34px_rgba(15,23,42,0.12)] md:min-h-12 md:min-w-14 md:rounded-2xl md:border-primary/30 md:bg-primary/14 md:text-sm md:shadow-none"
+                      aria-label={t('settings.columns.selectedCount')}
+                      className="settings-option-selected inline-flex min-h-14 min-w-16 items-center justify-center rounded-[20px] border px-4 text-base font-semibold text-primary ring-1 md:min-h-12 md:min-w-14 md:rounded-2xl md:text-sm"
                     >
                       {currentFixedColumnCount}
                     </output>
                     <button
                       type="button"
-                      aria-label="Increase waterfall columns"
+                      aria-label={t('settings.columns.increase')}
                       disabled={currentFixedColumnCount >= MAX_GALLERY_COLUMN_COUNT}
                       onClick={increaseColumnCount}
                       className={getOptionButtonClasses(false, currentFixedColumnCount >= MAX_GALLERY_COLUMN_COUNT)}
@@ -371,7 +404,7 @@ export function GallerySettingsModal({
                 </div>
                 {columnPreference === 'auto' && (
                   <p className="mt-3 text-xs text-on-surface-variant">
-                    Auto still follows the current responsive breakpoints. Use the stepper to switch to a fixed layout.
+                    {t('settings.columns.autoHint')}
                   </p>
                 )}
               </div>
@@ -379,16 +412,20 @@ export function GallerySettingsModal({
           </div>
         </div>
 
-        <div className="border-t border-white/55 bg-[linear-gradient(180deg,rgba(255,255,255,0.62),rgba(247,249,255,0.88))] px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2.5 shadow-[0_-16px_36px_rgba(15,23,42,0.08)] backdrop-blur-2xl sm:px-4 sm:pb-[max(1rem,env(safe-area-inset-bottom))] sm:pt-3 md:hidden">
+        <p className="px-1 text-xs text-on-surface-variant" data-testid="gallery-build-id">
+          Build {__GALLERY_BUILD_ID__}
+        </p>
+
+        <div className="settings-footer border-t px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2.5 backdrop-blur-2xl sm:px-4 sm:pb-[max(1rem,env(safe-area-inset-bottom))] sm:pt-3 md:hidden">
           <button
             ref={mobileCloseButtonRef}
             type="button"
             onClick={onClose}
             data-settings-close="mobile"
             tabIndex={isDesktopViewport ? -1 : undefined}
-            className="inline-flex min-h-14 w-full items-center justify-center rounded-[18px] bg-white/78 px-4 text-base font-semibold text-on-surface shadow-[0_10px_22px_rgba(15,23,42,0.08)] transition-colors duration-200 hover:bg-white/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+            className="settings-footer-button inline-flex min-h-14 w-full items-center justify-center rounded-[18px] px-4 text-base font-semibold text-on-surface transition-colors duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
           >
-            Close settings
+            {t('settings.closeMobile')}
           </button>
         </div>
       </div>

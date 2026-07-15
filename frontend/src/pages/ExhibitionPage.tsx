@@ -23,6 +23,12 @@ import type {
   GalleryMediaSourcePreference,
   GallerySortPreference,
 } from '../utils/gallerySettings';
+import {
+  applyGalleryThemePreference,
+  readGalleryThemePreference,
+  writeGalleryThemePreference,
+} from '../utils/galleryTheme';
+import type { GalleryThemePreference } from '../utils/galleryTheme';
 import { LoadTrigger } from '../components/exhibition/LoadTrigger';
 import { PhotoViewerModal } from '../components/viewer/PhotoViewerModal';
 import { fetchPhotos, resetPhotoRequestCache } from '../services/photos';
@@ -33,6 +39,12 @@ import type { Photo } from '../types/photo';
 import { readSelectedPhotoId, writeSelectedPhotoId } from '../utils/photoQuery';
 import { groupPhotosByMonth } from '../utils/groupPhotosByMonth';
 import { sortPhotos } from '../utils/sortPhotos';
+import {
+  EXHIBITION_STATUS_COPY,
+  isMediaSourceFailureMessage,
+  toUserFacingError,
+} from '../utils/userFacingError';
+import { t } from '../i18n';
 
 const DEFAULT_VIEWPORT_WIDTH = 1280;
 const TOP_VISIBILITY_THRESHOLD = 24;
@@ -152,6 +164,7 @@ export function ExhibitionPage() {
   const [persistedSettings] = useState(readGallerySettings);
   const [photos, setPhotos] = useState<Photo[]>([]);
   const [status, setStatus] = useState<'loading' | 'ready' | 'empty' | 'error'>('loading');
+  const [errorCopy, setErrorCopy] = useState<{ title: string; description: string }>(EXHIBITION_STATUS_COPY.error);
   const [visibleCount, setVisibleCount] = useState(() => getInitialVisiblePhotoCount(persistedSettings.columnPreference));
   const [selectedPhotoId, setSelectedPhotoId] = useState<string | null>(() => readSelectedPhotoId());
   const [isAtTop, setIsAtTop] = useState(true);
@@ -162,6 +175,7 @@ export function ExhibitionPage() {
   const [mediaSourcePreference, setMediaSourcePreference] = useState<GalleryMediaSourcePreference>(
     normalizeGalleryMediaSourcePreference(persistedSettings.mediaSourcePreference),
   );
+  const [themePreference, setThemePreference] = useState<GalleryThemePreference>(readGalleryThemePreference);
   const [mediaSourceStatuses, setMediaSourceStatuses] = useState<MediaSourceStatus[]>([]);
   const [hasLoadedMediaSourceStatuses, setHasLoadedMediaSourceStatuses] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
@@ -269,6 +283,7 @@ export function ExhibitionPage() {
     // Full load cycle: drop session cache so post-upload nav cannot pin a stale /api/photos snapshot.
     resetPhotoRequestCache();
     setStatus('loading');
+    setErrorCopy(EXHIBITION_STATUS_COPY.error);
     setVisibleCount(getInitialVisiblePhotoCount(columnPreference));
 
     const loadPhotos = async () => {
@@ -292,6 +307,16 @@ export function ExhibitionPage() {
           return;
         }
 
+        const description = toUserFacingError(error, 'exhibition');
+        const message = error instanceof Error ? error.message : '';
+        setErrorCopy(
+          isMediaSourceFailureMessage(message)
+            ? EXHIBITION_STATUS_COPY.mediaSourceUnavailable
+            : {
+                title: EXHIBITION_STATUS_COPY.error.title,
+                description,
+              },
+        );
         setStatus('error');
       }
     };
@@ -321,6 +346,30 @@ export function ExhibitionPage() {
       mediaSourcePreference,
     });
   }, [columnPreference, sortPreference, mediaSourcePreference]);
+
+  useEffect(() => {
+    writeGalleryThemePreference(themePreference);
+    applyGalleryThemePreference(themePreference);
+
+    if (themePreference !== 'system' || typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+      return;
+    }
+
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    if (!mediaQuery || typeof mediaQuery.addEventListener !== 'function') {
+      return;
+    }
+
+    const syncSystemTheme = () => {
+      applyGalleryThemePreference('system');
+    };
+
+    mediaQuery.addEventListener('change', syncSystemTheme);
+
+    return () => {
+      mediaQuery.removeEventListener('change', syncSystemTheme);
+    };
+  }, [themePreference]);
 
   const sortedPhotos = useMemo(() => sortPhotos(photos, sortPreference), [photos, sortPreference]);
   const allGroups = useMemo(() => groupPhotosByMonth(sortedPhotos), [sortedPhotos]);
@@ -368,7 +417,7 @@ export function ExhibitionPage() {
     }
 
     setSelectedPhotoId(null);
-    writeSelectedPhotoId(null);
+    writeSelectedPhotoId(null, { mode: 'replace' });
   }, [selectedPhotoId, sortedPhotos, status]);
 
   const loadMore = useCallback(() => {
@@ -378,14 +427,48 @@ export function ExhibitionPage() {
     setVisibleCount((current) => Math.min(current + loadMoreCount, sortedPhotos.length));
   }, [hasMorePhotos, loadMoreCount, sortedPhotos.length]);
 
+  useEffect(() => {
+    if (status !== 'ready') {
+      return;
+    }
+
+    const handlePopState = () => {
+      const nextPhotoId = readSelectedPhotoId();
+
+      if (nextPhotoId == null) {
+        setSelectedPhotoId(null);
+        return;
+      }
+
+      const exists = sortedPhotos.some((photo) => photo.id === nextPhotoId);
+
+      if (!exists) {
+        setSelectedPhotoId(null);
+        writeSelectedPhotoId(null, { mode: 'replace' });
+        return;
+      }
+
+      setSelectedPhotoId(nextPhotoId);
+    };
+
+    window.addEventListener('popstate', handlePopState);
+
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, [sortedPhotos, status]);
+
   const openPhoto = useCallback((photoId: string) => {
+    // Push only when opening from a closed viewer so Back closes.
+    // If already open (e.g. switching via the grid), replace to avoid history spam.
+    const mode = selectedPhotoId == null ? 'push' : 'replace';
     setSelectedPhotoId(photoId);
-    writeSelectedPhotoId(photoId);
-  }, []);
+    writeSelectedPhotoId(photoId, { mode });
+  }, [selectedPhotoId]);
 
   const closeViewer = useCallback(() => {
     setSelectedPhotoId(null);
-    writeSelectedPhotoId(null);
+    writeSelectedPhotoId(null, { mode: 'replace' });
   }, []);
 
   const openSettings = useCallback(() => {
@@ -408,7 +491,7 @@ export function ExhibitionPage() {
     }
 
     setSelectedPhotoId(nextPhoto.id);
-    writeSelectedPhotoId(nextPhoto.id);
+    writeSelectedPhotoId(nextPhoto.id, { mode: 'replace' });
   }, [sortedPhotos]);
 
   const scrollToTop = useCallback(() => {
@@ -432,18 +515,18 @@ export function ExhibitionPage() {
           {status === 'error' && (
             <ExhibitionStatusPanel
               variant="error"
-              title="Unable to load the exhibition"
-              description="Something went wrong while fetching works. Check your connection and try again."
-              primaryAction={{ label: 'Retry', onClick: retryLoad }}
-              secondaryHref={{ label: 'Open upload', href: '/upload' }}
+              title={errorCopy.title}
+              description={errorCopy.description}
+              primaryAction={{ label: t('exhibition.error.retry'), onClick: retryLoad }}
+              secondaryHref={{ label: t('exhibition.error.openUpload'), href: '/upload' }}
             />
           )}
           {status === 'empty' && (
             <ExhibitionStatusPanel
               variant="empty"
-              title="No works yet"
-              description="The exhibition is ready. Upload the first images to start the wall."
-              primaryHref={{ label: 'Upload first images', href: '/upload' }}
+              title={t('exhibition.empty.title')}
+              description={t('exhibition.empty.description')}
+              primaryHref={{ label: t('exhibition.empty.upload'), href: '/upload' }}
             />
           )}
           {status === 'ready' && (
@@ -476,10 +559,12 @@ export function ExhibitionPage() {
           columnPreference={columnPreference}
           sortPreference={sortPreference}
           mediaSourcePreference={mediaSourcePreference}
+          themePreference={themePreference}
           mediaSourceStatuses={mediaSourceStatuses}
           onSelectColumnPreference={setColumnPreference}
           onSelectSortPreference={setSortPreference}
           onSelectMediaSourcePreference={setMediaSourcePreference}
+          onSelectThemePreference={setThemePreference}
           onClose={closeSettings}
         />
       )}

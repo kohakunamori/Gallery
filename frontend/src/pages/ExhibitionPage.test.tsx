@@ -6,6 +6,7 @@ import { fetchPhotos, resetPhotoRequestCache } from '../services/photos';
 import { fetchMediaSourceStatuses } from '../services/mediaSources';
 import type { MediaSourceStatus } from '../services/mediaSources';
 import { GALLERY_MEDIA_SOURCE_VISIBILITY, GALLERY_SETTINGS_STORAGE_KEY } from '../utils/gallerySettings';
+import { GALLERY_THEME_STORAGE_KEY } from '../utils/galleryTheme';
 
 vi.mock('../services/photos', () => ({
   fetchPhotos: vi.fn(),
@@ -186,6 +187,7 @@ describe('ExhibitionPage', () => {
       })),
     );
     window.localStorage.clear();
+    document.documentElement.removeAttribute('data-theme');
     resetLocation('/');
     GALLERY_MEDIA_SOURCE_VISIBILITY.r2 = true;
     GALLERY_MEDIA_SOURCE_VISIBILITY.qiniu = true;
@@ -203,8 +205,11 @@ describe('ExhibitionPage', () => {
   });
 
   afterEach(() => {
+    // Avoid restoreAllMocks() here: RTL cleanup unmounts after this hook and theme
+    // effects still need a working matchMedia. beforeEach re-stubs globals next test.
     resetLocation('/');
-    vi.restoreAllMocks();
+    window.localStorage.clear();
+    document.documentElement.removeAttribute('data-theme');
   });
 
   it('renders the exhibition header, hero, month sections, and photo tiles', async () => {
@@ -751,29 +756,65 @@ describe('ExhibitionPage', () => {
     expect(screen.getByRole('dialog', { name: 'Image lightbox' })).toBeInTheDocument();
   });
 
-  it('writes the selected photo id into the URL when a tile is opened', async () => {
+  it('writes the selected photo id with pushState when a tile is opened', async () => {
     const user = userEvent.setup();
+    const replaceState = vi.spyOn(window.history, 'replaceState');
+    const pushState = vi.spyOn(window.history, 'pushState');
 
     render(<ExhibitionPage />);
 
-    await user.click(await screen.findByRole('button', { name: 'Open fresh.jpg' }));
+    await screen.findByRole('button', { name: 'Open fresh.jpg' });
+    replaceState.mockClear();
+    pushState.mockClear();
+
+    await user.click(screen.getByRole('button', { name: 'Open fresh.jpg' }));
 
     expect(screen.getByRole('dialog', { name: 'Image lightbox' })).toBeInTheDocument();
     expect(window.location.search).toBe('?photo=fresh');
+    expect(pushState).toHaveBeenCalledTimes(1);
+    expect(pushState.mock.calls[0]?.[2]).toBe('/?photo=fresh');
+    expect(replaceState).not.toHaveBeenCalled();
   });
 
-  it('clears the photo query param when the viewer closes', async () => {
+  it('uses replaceState when opening another photo while the viewer is already open', async () => {
     const user = userEvent.setup();
+    const replaceState = vi.spyOn(window.history, 'replaceState');
+    const pushState = vi.spyOn(window.history, 'pushState');
 
     render(<ExhibitionPage />);
 
     await user.click(await screen.findByRole('button', { name: 'Open fresh.jpg' }));
     expect(window.location.search).toBe('?photo=fresh');
+
+    replaceState.mockClear();
+    pushState.mockClear();
+
+    await user.click(screen.getByRole('button', { name: 'Open older.jpg' }));
+
+    expect(window.location.search).toBe('?photo=older');
+    expect(replaceState).toHaveBeenCalled();
+    expect(pushState).not.toHaveBeenCalled();
+  });
+
+  it('clears the photo query param with replaceState when the viewer closes', async () => {
+    const user = userEvent.setup();
+    const replaceState = vi.spyOn(window.history, 'replaceState');
+    const pushState = vi.spyOn(window.history, 'pushState');
+
+    render(<ExhibitionPage />);
+
+    await user.click(await screen.findByRole('button', { name: 'Open fresh.jpg' }));
+    expect(window.location.search).toBe('?photo=fresh');
+
+    replaceState.mockClear();
+    pushState.mockClear();
 
     await user.click(screen.getByRole('button', { name: 'Close image' }));
 
     expect(screen.queryByRole('dialog', { name: 'Image lightbox' })).not.toBeInTheDocument();
     expect(window.location.search).toBe('');
+    expect(replaceState).toHaveBeenCalled();
+    expect(pushState).not.toHaveBeenCalled();
   });
 
   it('updates the photo query with replaceState when navigating to the next image', async () => {
@@ -792,6 +833,65 @@ describe('ExhibitionPage', () => {
     await user.click(screen.getByRole('button', { name: 'Next image' }));
 
     expect(window.location.search).toBe('?photo=fresh');
+    expect(replaceState).toHaveBeenCalled();
+    expect(pushState).not.toHaveBeenCalled();
+  });
+
+  it('closes the viewer when popstate clears the photo query', async () => {
+    const user = userEvent.setup();
+
+    render(<ExhibitionPage />);
+
+    await user.click(await screen.findByRole('button', { name: 'Open fresh.jpg' }));
+    expect(screen.getByRole('dialog', { name: 'Image lightbox' })).toBeInTheDocument();
+    expect(window.location.search).toBe('?photo=fresh');
+
+    act(() => {
+      window.history.replaceState(window.history.state, '', '/');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: 'Image lightbox' })).not.toBeInTheDocument();
+    });
+    expect(window.location.search).toBe('');
+  });
+
+  it('opens the viewer when popstate restores a valid photo query', async () => {
+    render(<ExhibitionPage />);
+
+    await screen.findByRole('button', { name: 'Open fresh.jpg' });
+    expect(screen.queryByRole('dialog', { name: 'Image lightbox' })).not.toBeInTheDocument();
+
+    act(() => {
+      window.history.replaceState(window.history.state, '', '/?photo=fresh');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+
+    expect(await screen.findByRole('dialog', { name: 'Image lightbox' })).toBeInTheDocument();
+    expect(window.location.search).toBe('?photo=fresh');
+  });
+
+  it('clears selection with replaceState when popstate has an unknown photo id', async () => {
+    const replaceState = vi.spyOn(window.history, 'replaceState');
+    const pushState = vi.spyOn(window.history, 'pushState');
+
+    render(<ExhibitionPage />);
+
+    await screen.findByRole('button', { name: 'Open late-afternoon.jpg' });
+
+    replaceState.mockClear();
+    pushState.mockClear();
+
+    act(() => {
+      window.history.replaceState(window.history.state, '', '/?photo=missing-work');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+
+    await waitFor(() => {
+      expect(window.location.search).toBe('');
+    });
+    expect(screen.queryByRole('dialog', { name: 'Image lightbox' })).not.toBeInTheDocument();
     expect(replaceState).toHaveBeenCalled();
     expect(pushState).not.toHaveBeenCalled();
   });
@@ -1044,6 +1144,11 @@ describe('ExhibitionPage', () => {
 
     expect(screen.queryByRole('button', { name: 'Open photo-16.jpg' })).not.toBeInTheDocument();
 
+    const initialLoadedCount = screen
+      .getAllByTestId(/waterfall-column-/)
+      .reduce((sum, column) => sum + Number(column.getAttribute('data-total-count') ?? 0), 0);
+    expect(initialLoadedCount).toBe(16);
+
     const loadTrigger = screen.getByText('Continue scrolling');
     const loadTriggerObserver = getObserverForElement(loadTrigger);
 
@@ -1053,7 +1158,16 @@ describe('ExhibitionPage', () => {
       loadTriggerObserver?.trigger(loadTrigger, true);
     });
 
-    expect(await screen.findByRole('button', { name: 'Open photo-29.jpg' })).toBeInTheDocument();
+    // Progressive load-more still completes (may take multiple auto re-triggers while intersecting).
+    // Virtualized columns may not mount every card into the DOM at once.
+    await waitFor(() => {
+      const loadedCount = screen
+        .getAllByTestId(/waterfall-column-/)
+        .reduce((sum, column) => sum + Number(column.getAttribute('data-total-count') ?? 0), 0);
+      expect(loadedCount).toBe(30);
+    });
+    expect(screen.queryByText('Continue scrolling')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open photo-0.jpg' })).toBeInTheDocument();
   });
 
   it('loads another batch after visible count grows even if the trigger never leaves intersection', async () => {
@@ -1075,7 +1189,11 @@ describe('ExhibitionPage', () => {
     await screen.findByRole('button', { name: 'Open photo-0.jpg' });
 
     expect(screen.queryByRole('button', { name: 'Open photo-16.jpg' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Open photo-39.jpg' })).not.toBeInTheDocument();
+
+    const initialLoadedCount = screen
+      .getAllByTestId(/waterfall-column-/)
+      .reduce((sum, column) => sum + Number(column.getAttribute('data-total-count') ?? 0), 0);
+    expect(initialLoadedCount).toBe(16);
 
     const loadTrigger = screen.getByText('Continue scrolling');
     const loadTriggerObserver = getObserverForElement(loadTrigger);
@@ -1084,6 +1202,59 @@ describe('ExhibitionPage', () => {
       loadTriggerObserver?.trigger(loadTrigger, true);
     });
 
-    expect(await screen.findByRole('button', { name: 'Open photo-39.jpg' })).toBeInTheDocument();
+    await waitFor(() => {
+      const loadedCount = screen
+        .getAllByTestId(/waterfall-column-/)
+        .reduce((sum, column) => sum + Number(column.getAttribute('data-total-count') ?? 0), 0);
+      expect(loadedCount).toBe(40);
+    });
+    expect(screen.queryByText('Continue scrolling')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open photo-0.jpg' })).toBeInTheDocument();
   });
+
+
+  it('shows media-source unavailable copy when no remote source can be reached', async () => {
+    window.localStorage.setItem(
+      GALLERY_SETTINGS_STORAGE_KEY,
+      JSON.stringify({
+        columnPreference: 'auto',
+        sortPreference: 'newest',
+        mediaSourcePreference: 'auto',
+      }),
+    );
+    mockedFetchPhotos.mockRejectedValue(new Error('No reachable remote media source.'));
+
+    render(<ExhibitionPage />);
+
+    expect(await screen.findByTestId('exhibition-status-error')).toBeInTheDocument();
+    expect(screen.getByText('Media is temporarily unavailable')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'None of the media sources could be reached right now. Try again, or choose another source in settings.',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+  });
+
+  it('applies dark data-theme from settings and persists gallery.theme', async () => {
+    const user = userEvent.setup();
+
+    render(<ExhibitionPage />);
+
+    await user.click(await screen.findByRole('button', { name: 'Open gallery settings' }));
+    await user.click(screen.getByRole('button', { name: 'Dark' }));
+
+    expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
+    expect(window.localStorage.getItem(GALLERY_THEME_STORAGE_KEY)).toBe('dark');
+  });
+
+  it('hydrates theme preference and applies light data-theme on first render', async () => {
+    window.localStorage.setItem(GALLERY_THEME_STORAGE_KEY, 'light');
+
+    render(<ExhibitionPage />);
+
+    await screen.findByRole('banner');
+    expect(document.documentElement.getAttribute('data-theme')).toBe('light');
+  });
+
 });
