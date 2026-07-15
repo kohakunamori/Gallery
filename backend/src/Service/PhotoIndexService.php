@@ -64,7 +64,22 @@ final class PhotoIndexService
 
     private function catalogCacheIdentity(): string
     {
-        return $this->catalogIdentity !== '' ? $this->catalogIdentity : spl_object_id($this->catalog) . '';
+        if ($this->catalogIdentity === '') {
+            return spl_object_id($this->catalog) . '';
+        }
+
+        // Content-aware identity so CLI / out-of-process catalog rewrites miss
+        // the warm FilePhotoCache entry without waiting for TTL alone.
+        $stat = @stat($this->catalogIdentity);
+
+        if ($stat === false) {
+            return $this->catalogIdentity;
+        }
+
+        $mtime = $stat['mtime'] ?? 0;
+        $size = $stat['size'] ?? 0;
+
+        return $this->catalogIdentity . '|' . (string) $mtime . '|' . (string) $size;
     }
 
     private function resolveMediaBaseUrl(string $mediaSource): string

@@ -6,6 +6,7 @@ namespace Gallery\Tests\Service;
 
 use Gallery\Service\PhotoCatalogService;
 use Gallery\Service\PhotoMetadataReader;
+use Gallery\Service\PhotoMetadataReaderInterface;
 use Gallery\Service\PhotoUploadService;
 use PHPUnit\Framework\TestCase;
 use RecursiveDirectoryIterator;
@@ -110,6 +111,131 @@ final class PhotoUploadServiceTest extends TestCase
         } finally {
             @unlink($catalogPath);
             $this->removeDirectory($scriptDirectory);
+        }
+    }
+
+    public function testItDefaultsCatalogSortTimeToUploadTimeAndKeepsTakenAt(): void
+    {
+        $previousMode = getenv('UPLOAD_SORT_TIME_MODE');
+        putenv('UPLOAD_SORT_TIME_MODE');
+        unset($_ENV['UPLOAD_SORT_TIME_MODE']);
+
+        $catalogPath = $this->createTempFile('gallery-upload-catalog-', '.json');
+        $scriptDirectory = $this->createTempDirectory('gallery-upload-script-');
+        $scriptPath = $scriptDirectory . '/upload_r2.php';
+        file_put_contents($scriptPath, $this->phpUploadScriptStub($scriptDirectory . '/python.log'));
+
+        $metadataReader = new class implements PhotoMetadataReaderInterface {
+            public function read(string $path): array
+            {
+                return [
+                    'takenAt' => '2018-01-02T03:04:05+00:00',
+                    'width' => 1,
+                    'height' => 1,
+                ];
+            }
+        };
+
+        $service = new PhotoUploadService(
+            new PhotoCatalogService($catalogPath),
+            $metadataReader,
+            $scriptPath,
+            PHP_BINARY,
+        );
+
+        $sourcePath = $scriptDirectory . '/source.png';
+        file_put_contents($sourcePath, $this->validPngContents());
+        // Old staged mtime must not become default sortTime.
+        touch($sourcePath, strtotime('2015-06-01T00:00:00Z'));
+
+        $before = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
+        $batch = null;
+
+        try {
+            $batch = $service->prepareUpload([
+                new UploadedFile($sourcePath, 'source.png', 'image/png', filesize($sourcePath), UPLOAD_ERR_OK),
+            ]);
+            $after = new \DateTimeImmutable('now', new \DateTimeZone('UTC'));
+
+            self::assertCount(1, $batch['catalogItems']);
+            $item = $batch['catalogItems'][0];
+            self::assertSame('2018-01-02T03:04:05+00:00', $item['takenAt']);
+            self::assertNotSame($item['takenAt'], $item['sortTime']);
+
+            $sortTime = new \DateTimeImmutable($item['sortTime']);
+            self::assertGreaterThanOrEqual($before->getTimestamp() - 1, $sortTime->getTimestamp());
+            self::assertLessThanOrEqual($after->getTimestamp() + 1, $sortTime->getTimestamp());
+        } finally {
+            if (is_array($batch)) {
+                $service->removeTemporaryDirectory($batch['temporaryDirectory']);
+            }
+            @unlink($catalogPath);
+            $this->removeDirectory($scriptDirectory);
+            if ($previousMode === false) {
+                putenv('UPLOAD_SORT_TIME_MODE');
+                unset($_ENV['UPLOAD_SORT_TIME_MODE']);
+            } else {
+                putenv('UPLOAD_SORT_TIME_MODE=' . $previousMode);
+                $_ENV['UPLOAD_SORT_TIME_MODE'] = $previousMode;
+            }
+        }
+    }
+
+    public function testItUsesSourceMtimeSortTimeWhenEnvOverrideIsSet(): void
+    {
+        $previousMode = getenv('UPLOAD_SORT_TIME_MODE');
+        putenv('UPLOAD_SORT_TIME_MODE=source-mtime');
+        $_ENV['UPLOAD_SORT_TIME_MODE'] = 'source-mtime';
+
+        $catalogPath = $this->createTempFile('gallery-upload-catalog-', '.json');
+        $scriptDirectory = $this->createTempDirectory('gallery-upload-script-');
+        $scriptPath = $scriptDirectory . '/upload_r2.php';
+        file_put_contents($scriptPath, $this->phpUploadScriptStub($scriptDirectory . '/python.log'));
+
+        $metadataReader = new class implements PhotoMetadataReaderInterface {
+            public function read(string $path): array
+            {
+                return [
+                    'takenAt' => '2018-01-02T03:04:05+00:00',
+                    'width' => 1,
+                    'height' => 1,
+                ];
+            }
+        };
+
+        $service = new PhotoUploadService(
+            new PhotoCatalogService($catalogPath),
+            $metadataReader,
+            $scriptPath,
+            PHP_BINARY,
+        );
+
+        $sourcePath = $scriptDirectory . '/source.png';
+        file_put_contents($sourcePath, $this->validPngContents());
+        $oldMtime = strtotime('2015-06-01T12:30:00Z');
+        touch($sourcePath, $oldMtime);
+        clearstatcache(true, $sourcePath);
+
+        try {
+            $buildCatalogItem = new \ReflectionMethod(PhotoUploadService::class, 'buildCatalogItem');
+            $item = $buildCatalogItem->invoke($service, $sourcePath, 'uploads/source.avif', 'source.png');
+
+            self::assertSame('2018-01-02T03:04:05+00:00', $item['takenAt']);
+            $expectedSortTime = (new \DateTimeImmutable('@' . (string) $oldMtime))
+                ->setTimezone(new \DateTimeZone('UTC'))
+                ->format(DATE_ATOM);
+            self::assertSame($expectedSortTime, $item['sortTime']);
+            self::assertNotSame($item['takenAt'], $item['sortTime']);
+        } finally {
+            @unlink($catalogPath);
+            $this->removeDirectory($scriptDirectory);
+            if ($previousMode === false) {
+                putenv('UPLOAD_SORT_TIME_MODE');
+                unset($_ENV['UPLOAD_SORT_TIME_MODE']);
+            } else {
+                putenv('UPLOAD_SORT_TIME_MODE=' . $previousMode);
+                $_ENV['UPLOAD_SORT_TIME_MODE'] = $previousMode;
+            }
         }
     }
 

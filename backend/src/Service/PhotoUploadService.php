@@ -151,10 +151,10 @@ final class PhotoUploadService
         }
 
         $metadata = $this->metadataReader->read($temporaryPath);
-        $sortTime = $metadata['takenAt']
-            ?? (new \DateTimeImmutable('@' . (string) $modifiedAt))
-                ->setTimezone(new \DateTimeZone('UTC'))
-                ->format(DATE_ATOM);
+        // Default product rule: sortTime is upload/catalog-write time so newest
+        // sort surfaces just-published works. UPLOAD_SORT_TIME_MODE=source-mtime
+        // restores staged/source mtime (not takenAt) for bulk archive staging.
+        $sortTime = $this->resolveCatalogSortTime($modifiedAt);
         $version = sha1($publishedPath . '|' . (string) $modifiedAt . '|' . (string) $size);
 
         return [
@@ -167,6 +167,28 @@ final class PhotoUploadService
             'size' => $size,
             'version' => $version,
         ];
+    }
+
+    private function resolveCatalogSortTime(int $modifiedAt): string
+    {
+        if ($this->usesSourceMtimeSort()) {
+            return (new \DateTimeImmutable('@' . (string) $modifiedAt))
+                ->setTimezone(new \DateTimeZone('UTC'))
+                ->format(DATE_ATOM);
+        }
+
+        return (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format(DATE_ATOM);
+    }
+
+    private function usesSourceMtimeSort(): bool
+    {
+        $mode = $_ENV['UPLOAD_SORT_TIME_MODE'] ?? getenv('UPLOAD_SORT_TIME_MODE');
+
+        if (!is_string($mode) || $mode === '') {
+            return false;
+        }
+
+        return strtolower(trim($mode)) === 'source-mtime';
     }
 
     /**

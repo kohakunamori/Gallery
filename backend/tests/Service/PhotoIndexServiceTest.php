@@ -90,15 +90,72 @@ final class PhotoIndexServiceTest extends TestCase
         );
 
         $first = $service->all();
-        file_put_contents($catalogPath, json_encode([
-            'version' => 1,
-            'updatedAt' => gmdate(DATE_ATOM),
-            'items' => [],
-        ], JSON_THROW_ON_ERROR));
         $second = $service->all();
 
         self::assertSame($first, $second);
         self::assertCount(1, $second);
+
+        @unlink($catalogPath);
+        $this->removeDirectory($cacheDirectory);
+    }
+
+    public function test_it_misses_cache_when_catalog_content_changes(): void
+    {
+        $catalogPath = $this->writeCatalog([
+            [
+                'path' => 'cached.jpg',
+                'filename' => 'cached.jpg',
+                'takenAt' => null,
+                'sortTime' => '2026-03-31T12:00:00+00:00',
+                'width' => 1200,
+                'height' => 800,
+                'size' => 12,
+                'version' => 'cached-version',
+            ],
+        ]);
+        $cacheDirectory = sys_get_temp_dir() . '/gallery-cache-' . bin2hex(random_bytes(4));
+        mkdir($cacheDirectory, 0777, true);
+
+        $service = new PhotoIndexService(
+            new PhotoCatalogService($catalogPath),
+            'https://r2.example.com/gallery',
+            new FilePhotoCache($cacheDirectory),
+            300,
+            '',
+            null,
+            $catalogPath,
+        );
+
+        $first = $service->all();
+        self::assertCount(1, $first);
+
+        // Ensure mtime advances on filesystems with coarse timestamp resolution.
+        clearstatcache(true, $catalogPath);
+        $previousMtime = (int) filemtime($catalogPath);
+        file_put_contents($catalogPath, json_encode([
+            'version' => 1,
+            'updatedAt' => gmdate(DATE_ATOM),
+            'items' => [
+                [
+                    'path' => 'fresh.jpg',
+                    'filename' => 'fresh.jpg',
+                    'takenAt' => null,
+                    'sortTime' => '2026-07-15T12:00:00+00:00',
+                    'width' => 800,
+                    'height' => 600,
+                    'size' => 20,
+                    'version' => 'fresh-version',
+                ],
+            ],
+        ], JSON_THROW_ON_ERROR));
+        touch($catalogPath, $previousMtime + 2);
+        clearstatcache(true, $catalogPath);
+
+        $second = $service->all();
+
+        self::assertNotSame($first, $second);
+        self::assertCount(1, $second);
+        self::assertSame('fresh.jpg', $second[0]['filename']);
 
         @unlink($catalogPath);
         $this->removeDirectory($cacheDirectory);

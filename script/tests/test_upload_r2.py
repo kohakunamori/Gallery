@@ -625,6 +625,90 @@ class PhotoCatalogAndExistingApiTests(unittest.TestCase):
                 upload_r2.get_photo_catalog_remote_path('/var/www/gallery/data/gallery/photos-index.json'),
             )
 
+    def test_build_photo_catalog_item_default_sort_time_is_upload_time(self):
+        with TemporaryDirectory() as temp_dir:
+            source = Path(temp_dir) / 'old-shot.png'
+            source.write_bytes(
+                b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01'
+                b'\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\x0f\x00'
+                b'\x00\x01\x01\x00\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82'
+            )
+            old_mtime = 1_430_000_000.0  # ~2015
+            os.utime(source, (old_mtime, old_mtime))
+            mtime_sort = upload_r2._mtime_to_sort_time(old_mtime)
+
+            with patch.dict(os.environ, {}, clear=False):
+                os.environ.pop(upload_r2.SORT_TIME_MODE_ENV, None)
+                before = upload_r2._utc_now_iso()
+                item = upload_r2.build_photo_catalog_item(
+                    source,
+                    relative_path='uploads/old-shot.png',
+                )
+                after = upload_r2._utc_now_iso()
+
+            self.assertNotEqual(mtime_sort, item['sortTime'])
+            self.assertGreaterEqual(item['sortTime'], before)
+            self.assertLessEqual(item['sortTime'], after)
+            self.assertIsNone(item['takenAt'])
+            self.assertEqual('uploads/old-shot.png', item['path'])
+
+    def test_build_photo_catalog_item_source_mtime_mode_uses_file_mtime(self):
+        with TemporaryDirectory() as temp_dir:
+            source = Path(temp_dir) / 'archive.png'
+            source.write_bytes(
+                b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01'
+                b'\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\x0f\x00'
+                b'\x00\x01\x01\x00\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82'
+            )
+            old_mtime = 1_430_000_000.0
+            os.utime(source, (old_mtime, old_mtime))
+            expected = upload_r2._mtime_to_sort_time(old_mtime)
+
+            item = upload_r2.build_photo_catalog_item(
+                source,
+                relative_path='uploads/archive.png',
+                sort_time_mode='source-mtime',
+            )
+
+            self.assertEqual(expected, item['sortTime'])
+
+    def test_resolve_sort_time_mode_cli_wins_over_env(self):
+        with patch.dict(os.environ, {upload_r2.SORT_TIME_MODE_ENV: 'source-mtime'}, clear=False):
+            self.assertEqual('upload', upload_r2.resolve_sort_time_mode('upload'))
+            self.assertEqual('source-mtime', upload_r2.resolve_sort_time_mode(None))
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop(upload_r2.SORT_TIME_MODE_ENV, None)
+            self.assertEqual('upload', upload_r2.resolve_sort_time_mode(None))
+            self.assertEqual('upload', upload_r2.resolve_sort_time_mode('invalid'))
+
+    def test_build_photo_catalog_item_respects_env_when_mode_omitted(self):
+        with TemporaryDirectory() as temp_dir:
+            source = Path(temp_dir) / 'env-mode.png'
+            source.write_bytes(
+                b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01'
+                b'\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\x0f\x00'
+                b'\x00\x01\x01\x00\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82'
+            )
+            old_mtime = 1_430_000_000.0
+            os.utime(source, (old_mtime, old_mtime))
+            expected = upload_r2._mtime_to_sort_time(old_mtime)
+
+            with patch.dict(os.environ, {upload_r2.SORT_TIME_MODE_ENV: 'source-mtime'}, clear=False):
+                item = upload_r2.build_photo_catalog_item(
+                    source,
+                    relative_path='uploads/env-mode.png',
+                )
+
+            self.assertEqual(expected, item['sortTime'])
+
+    def test_build_parser_exposes_sort_time_flag(self):
+        parser = upload_r2.build_parser()
+        help_text = parser.format_help()
+        self.assertIn('--sort-time', help_text)
+        self.assertIn('UPLOAD_SORT_TIME_MODE', help_text)
+        args = parser.parse_args(['--sort-time', 'source-mtime'])
+        self.assertEqual('source-mtime', args.sort_time)
+
     def test_merge_photo_catalog_items_keeps_existing_and_adds_new(self):
         base = {
             'version': 1,
@@ -798,6 +882,7 @@ class PhotoCatalogAndExistingApiTests(unittest.TestCase):
             )
             catalog_path = Path(temp_dir) / 'photos-index.json'
             prepared_cache = Path(temp_dir) / 'prepared-cache'
+            pending_catalog = Path(temp_dir) / 'pending-catalog.json'
             prepared_cache.mkdir()
             (prepared_cache / 'cached.bin').write_bytes(b'cache')
             args = SimpleNamespace(
@@ -813,6 +898,7 @@ class PhotoCatalogAndExistingApiTests(unittest.TestCase):
                 compression=upload_r2.COMPRESSION_MODE_NONE,
                 replace_remote_png=False,
                 replace_remote_avif=False,
+                sort_time=None,
                 bucket='bucket',
                 prefix='gallery',
                 endpoint='https://example.r2.cloudflarestorage.com',
@@ -856,6 +942,7 @@ class PhotoCatalogAndExistingApiTests(unittest.TestCase):
                 'UPLOAD_DISCARD_PREPARED_CACHE': '1',
             }, clear=False), \
                  patch.object(upload_r2, 'get_prepared_cache_dir', return_value=prepared_cache), \
+                 patch.object(upload_r2, 'get_pending_catalog_file_path', return_value=pending_catalog), \
                  patch('upload_r2.resolve_runtime_config', return_value=config), \
                  patch('upload_r2._load_env_files'), \
                  patch('upload_r2._collect_image_files', return_value=(folder, [source])), \

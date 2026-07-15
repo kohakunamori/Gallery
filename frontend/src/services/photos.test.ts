@@ -83,4 +83,27 @@ describe('fetchPhotos', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+
+  it('fetches again after resetPhotoRequestCache clears the session cache', async () => {
+    const firstPhoto = { ...samplePhoto, id: 'photo-1' };
+    const secondPhoto = { ...samplePhoto, id: 'photo-2', filename: 'after-upload.jpg' };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ items: [firstPhoto] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ items: [secondPhoto] }),
+      });
+
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(fetchPhotos('r2')).resolves.toEqual([firstPhoto]);
+    resetPhotoRequestCache();
+    await expect(fetchPhotos('r2')).resolves.toEqual([secondPhoto]);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
 });

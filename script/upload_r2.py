@@ -40,6 +40,11 @@ COMPRESSION_MODE_NONE = 'none'
 DEFAULT_COMPRESSION_MODE = COMPRESSION_MODE_AVIF_LOSSLESS
 COMPATIBILITY_COMPRESSION_MODE = COMPRESSION_MODE_PNG
 COMPRESSION_MODE_CHOICES = (COMPRESSION_MODE_AVIF_LOSSLESS, COMPRESSION_MODE_PNG, COMPRESSION_MODE_NONE)
+SORT_TIME_MODE_UPLOAD = 'upload'
+SORT_TIME_MODE_SOURCE_MTIME = 'source-mtime'
+SORT_TIME_MODE_CHOICES = (SORT_TIME_MODE_UPLOAD, SORT_TIME_MODE_SOURCE_MTIME)
+SORT_TIME_MODE_ENV = 'UPLOAD_SORT_TIME_MODE'
+DEFAULT_SORT_TIME_MODE = SORT_TIME_MODE_UPLOAD
 AVIF_CONVERTIBLE_EXTS = {'.jpg', '.jpeg', '.png', '.webp', '.bmp', '.tiff'}
 AVIF_OUTPUT_SUFFIX = '.avif'
 EXISTENCE_CHECK_MAX_WORKERS = 16
@@ -294,6 +299,24 @@ def _mtime_to_sort_time(mtime: float) -> str:
     return datetime.fromtimestamp(mtime, timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
 
 
+def resolve_sort_time_mode(cli_value: str | None = None) -> str:
+    """Resolve catalog sortTime mode.
+
+    CLI ``--sort-time`` wins when set. Otherwise ``UPLOAD_SORT_TIME_MODE`` is
+    read. Invalid or empty values fall back to upload (wall-clock) time.
+    """
+    if isinstance(cli_value, str):
+        normalized = cli_value.strip().lower()
+        if normalized in SORT_TIME_MODE_CHOICES:
+            return normalized
+
+    env_value = (os.getenv(SORT_TIME_MODE_ENV) or '').strip().lower()
+    if env_value in SORT_TIME_MODE_CHOICES:
+        return env_value
+
+    return DEFAULT_SORT_TIME_MODE
+
+
 def read_image_dimensions(path: Path) -> tuple[int | None, int | None]:
     try:
         from PIL import Image  # type: ignore
@@ -353,12 +376,20 @@ def build_photo_catalog_item(
     *,
     relative_path: str,
     upload_path: Path | None = None,
+    sort_time_mode: str | None = None,
 ) -> dict:
     normalized_path = str(PurePosixPath(relative_path.lstrip('/')))
     stat_path = upload_path if upload_path is not None and upload_path.is_file() else source_path
     size = stat_path.stat().st_size if stat_path.is_file() else source_path.stat().st_size
     mtime = source_path.stat().st_mtime
-    sort_time = _mtime_to_sort_time(mtime)
+    # None resolves via UPLOAD_SORT_TIME_MODE env, then defaults to upload-time.
+    mode = resolve_sort_time_mode(sort_time_mode)
+    # Default product rule: sortTime is upload/catalog-write time so newest sort
+    # surfaces just-published works. source-mtime restores prior chronology.
+    if mode == SORT_TIME_MODE_SOURCE_MTIME:
+        sort_time = _mtime_to_sort_time(mtime)
+    else:
+        sort_time = _utc_now_iso()
     width, height = read_image_dimensions(source_path)
     version = hashlib.sha1(f'{normalized_path}|{mtime}|{size}'.encode('utf-8')).hexdigest()
     return {
@@ -3766,6 +3797,7 @@ def run_upload(args, log_callback=None) -> int:
 
     counters = {'uploaded': 0, 'skipped': 0, 'dry-run': 0, 'failed': 0}
     catalog_items_by_path: dict[str, dict] = {}
+    sort_time_mode = resolve_sort_time_mode(getattr(args, 'sort_time', None))
     batch_log_kwargs = {'log_callback': log_callback} if log_callback is not None else {}
     batch_compression_kwargs = {'compression': config.compression} if config.compression != COMPATIBILITY_COMPRESSION_MODE else {}
 
@@ -3841,6 +3873,7 @@ def run_upload(args, log_callback=None) -> int:
             catalog_items_by_path[relative_path] = build_photo_catalog_item(
                 path,
                 relative_path=relative_path,
+                sort_time_mode=sort_time_mode,
             )
         if (
             config.replace_remote_png
@@ -4089,6 +4122,16 @@ def build_parser() -> argparse.ArgumentParser:
             '远端服务器上的 photos-index.json 路径（SFTP）。'
             '脚本与 API 不在同一机时使用；需 LINUX_UPLOAD_HOST/USER + KEY 或 PASSWORD。'
             '未传时使用 PHOTO_CATALOG_REMOTE_PATH。默认不上传图片到 Linux。'
+        ),
+    )
+    common_group.add_argument(
+        '--sort-time',
+        choices=SORT_TIME_MODE_CHOICES,
+        default=None,
+        help=(
+            '写入 catalog 时 sortTime 的来源。默认 upload（UTC 当前时间，新作品出现在 newest 排序顶部）；'
+            'source-mtime 使用源文件修改时间（历史批量归档）。'
+            f'未传时读取环境变量 {SORT_TIME_MODE_ENV}；无效或空则回退 upload。CLI 优先于环境变量。'
         ),
     )
 
