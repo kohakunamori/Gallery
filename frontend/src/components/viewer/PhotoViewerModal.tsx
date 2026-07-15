@@ -289,7 +289,7 @@ export function PhotoViewerModal({ photos, selectedIndex, onSelectIndex, onClose
   return (
     <div
       ref={dialogRef}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4 py-6 text-white backdrop-blur-md md:px-8"
+      className="viewer-stage fixed inset-0 z-50 flex items-center justify-center px-4 py-6 text-white backdrop-blur-md md:px-8"
       role="dialog"
       aria-modal="true"
       aria-label="Image lightbox"

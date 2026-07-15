@@ -203,6 +203,20 @@
   --color-primary-fixed: 92 28 58;
 }
 
+/* im@s-style stage chrome: notched card corner and spotlight lightbox. */
+.imas-card {
+  /* 45° cut on the top-right corner; the other corners keep their border-radius. */
+  clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 0 100%);
+}
+
+.viewer-stage {
+  /* Dark house with a soft spotlight above center, tinted by the active accent. */
+  background:
+    radial-gradient(120% 80% at 50% 36%, rgb(var(--color-primary) / 0.14), transparent 62%),
+    radial-gradient(80% 55% at 50% 44%, rgba(255, 255, 255, 0.05), transparent 58%),
+    rgba(7, 8, 12, 0.82);
+}
+
 body {
   margin: 0;
   min-width: 320px;
