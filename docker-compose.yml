@@ -1,0 +1,49 @@
+services:
+  backend:
+    image: ${BACKEND_IMAGE:-ghcr.io/kohakunamori/gallery-backend:latest}
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    environment:
+      MEDIA_BASE_URL: ${MEDIA_BASE_URL:-https://static.cf.nyaneko.cn/gallery}
+      PHOTO_CATALOG_PATH: /var/www/gallery/backend/var/photos-index.json
+      UPLOAD_TEMPORARY_DIRECTORY: /var/www/gallery/backend/var/upload-batches
+      UPLOAD_SCRIPT_ENV_FILE: ${UPLOAD_SCRIPT_ENV_FILE:-/run/secrets/upload_r2.env}
+      UPLOAD_ACCESS_TOKEN: ${UPLOAD_ACCESS_TOKEN:-}
+      QINIU_MEDIA_BASE_URL: ${QINIU_MEDIA_BASE_URL:-}
+      QINIU_ACCESS_KEY: ${QINIU_ACCESS_KEY:-}
+      QINIU_SECRET_KEY: ${QINIU_SECRET_KEY:-}
+      QINIU_BUCKET: ${QINIU_BUCKET:-}
+      QINIU_DOMAIN: ${QINIU_DOMAIN:-}
+    volumes:
+      # Host-managed catalog + cache + temp batches (easy to edit/replace photos-index.json).
+      - ${GALLERY_DATA_HOST_PATH:-./data/gallery}:/var/www/gallery/backend/var
+      # Mount upload credentials (R2 keys etc.) as a file readable by the PHP/Python process.
+      - ${UPLOAD_ENV_HOST_PATH:-./script/upload_r2.env}:/run/secrets/upload_r2.env:ro
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  frontend:
+    image: ${FRONTEND_IMAGE:-ghcr.io/kohakunamori/gallery-frontend:latest}
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${GALLERY_HTTP_PORT:-8088}:80"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

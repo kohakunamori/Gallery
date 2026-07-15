@@ -1,0 +1,60 @@
+# --- AI / local tooling (keep on disk, do not publish) ---
+.claude/
+.trellis/
+.agents/
+.codex/
+.cursor/
+.playwright-mcp/
+.worktrees/
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+CODEX.md
+PERFORMANCE_OPTIMIZATION_PLAN.md
+mitm_mcp_traffic.db
+./trellis
+
+# ad-hoc local debug helpers
+_vps_*.py
+_vps_*.json
+_vps_*.txt
+_find_missing.py
+_check_r2_missing.py
+_sync_pending.py
+
+# --- secrets / runtime data ---
+backend/.env
+backend/var/cache/
+backend/var/upload-batches/
+script/upload_r2.env
+data/
+
+# upload script local caches
+script/.upload_target_cache.json
+script/.upload_pending_catalog.json
+script/.upload_prepared_cache/
+script/_r2_unmatched/
+
+# --- dependencies / build ---
+backend/vendor/
+backend/.phpunit.cache/
+frontend/node_modules/
+frontend/dist/
+phpenv/
+stitch_exports/
+tools/
+*.zip
+
+# --- python caches / noise ---
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*py_failed
+*.py[cod]
+
+# --- historical agent plan dumps (local only) ---
+docs/superpowers/
+script/docs/
+
+# --- retired local media samples (images live on R2) ---
+storage/

@@ -1,0 +1,438 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Gallery\Tests\Action;
+
+use Gallery\Service\FilePhotoCache;
+use PHPUnit\Framework\TestCase;
+use RecursiveDirectoryIterator;
+use RecursiveIteratorIterator;
+use Slim\Psr7\Factory\ServerRequestFactory;
+use Slim\Psr7\UploadedFile;
+
+final class UploadPhotosActionTest extends TestCase
+{
+    public function testItReturnsJsonValidationErrorAndKeepsCacheForUnsupportedFiles(): void
+    {
+        $catalogPath = $this->createTempCatalog('gallery-upload-action-catalog-');
+        $cacheDirectory = $this->createTempDirectory('gallery-upload-action-cache-');
+        $cache = new FilePhotoCache($cacheDirectory);
+        $cachedValue = [['id' => 'stale']];
+        $cache->put('photos:r2', $cachedValue, 300);
+
+        $app = createApp($catalogPath, '/media', $cache, true);
+        $request = (new ServerRequestFactory())
+            ->createServerRequest('POST', '/upload')
+            ->withUploadedFiles([
+                'files' => [$this->uploadedFile($this->createTempDirectory('gallery-upload-action-source-'), 'source.txt', 'notes.txt', 'notes')],
+            ]);
+
+        $response = $app->handle($request);
+        $payload = json_decode((string) $response->getBody(), true, 512, JSON_THROW_ON_ERROR);
+
+        self::assertSame(400, $response->getStatusCode());
+        self::assertSame(['error' => 'Unsupported image format: notes.txt'], $payload);
+        self::assertSame($cachedValue, $cache->get('photos:r2'));
+        self::assertFileDoesNotExist(dirname($catalogPath) . '/uploads');
+
+        @unlink($catalogPath);
+        $this->removeDirectory($cacheDirectory);
+    }
+
+    public function testItRejectsMissingUploadTokenWhenConfigured(): void
+    {
+        $catalogPath = $this->createTempCatalog('gallery-upload-action-catalog-');
+
+        try {
+            $app = createApp(
+                $catalogPath,
+                '/media',
+                null,
+                true,
+                '/media',
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                'secret-token',
+            );
+            $request = (new ServerRequestFactory())->createServerRequest('POST', '/upload');
+
+            $response = $app->handle($request);
+            $payload = json_decode((string) $response->getBody(), true, 512, JSON_THROW_ON_ERROR);
+
+            self::assertSame(401, $response->getStatusCode());
+            self::assertSame(['error' => 'Upload token is required or invalid.'], $payload);
+        } finally {
+            @unlink($catalogPath);
+        }
+    }
+
+    public function testItAcceptsConfiguredUploadToken(): void
+    {
+        $catalogPath = $this->createTempCatalog('gallery-upload-action-catalog-');
+        $scriptDirectory = $this->createTempDirectory('gallery-upload-action-script-');
+        $scriptPath = $scriptDirectory . '/upload_r2.php';
+        file_put_contents($scriptPath, $this->phpUploadScriptStub($scriptDirectory . '/upload.log'));
+
+        try {
+            $app = createApp(
+                $catalogPath,
+                '/media',
+                null,
+                true,
+                '/media',
+                null,
+                null,
+                null,
+                null,
+                null,
+                $scriptPath,
+                PHP_BINARY,
+                null,
+                null,
+                'secret-token',
+            );
+            $request = (new ServerRequestFactory())
+                ->createServerRequest('POST', '/upload')
+                ->withHeader('X-Upload-Token', 'secret-token')
+                ->withUploadedFiles([
+                    'file' => $this->uploadedFile($this->createTempDirectory('gallery-upload-action-source-'), 'source.png', 'source.png', $this->validPngContents()),
+                ]);
+
+            $response = $app->handle($request);
+            $events = $this->decodeNdjson((string) $response->getBody());
+
+            self::assertSame(200, $response->getStatusCode());
+            self::assertSame('complete', $events[array_key_last($events)]['type']);
+        } finally {
+            @unlink($catalogPath);
+            $this->removeDirectory($scriptDirectory);
+        }
+    }
+
+    public function testItRejectsCrossSiteBrowserUploads(): void
+    {
+        $catalogPath = $this->createTempCatalog('gallery-upload-action-catalog-');
+        $app = createApp($catalogPath, '/media', null, true);
+        $request = (new ServerRequestFactory())
+            ->createServerRequest('POST', '/upload')
+            ->withHeader('Sec-Fetch-Site', 'cross-site');
+
+        $response = $app->handle($request);
+        $payload = json_decode((string) $response->getBody(), true, 512, JSON_THROW_ON_ERROR);
+
+        self::assertSame(403, $response->getStatusCode());
+        self::assertSame(['error' => 'Cross-site uploads are not allowed.'], $payload);
+
+        @unlink($catalogPath);
+    }
+
+    public function testItClearsOnlyPhotoCacheAfterSuccessfulUpload(): void
+    {
+        $catalogPath = $this->createTempCatalog('gallery-upload-action-catalog-');
+        $cacheDirectory = $this->createTempDirectory('gallery-upload-action-cache-');
+        $cache = new FilePhotoCache($cacheDirectory);
+        $cache->put('photos:r2', [['id' => 'stale']], 300);
+        $qiniuUsageCache = $cacheDirectory . '/qiniu-usage.json';
+        file_put_contents($qiniuUsageCache, '{}');
+
+        $scriptDirectory = $this->createTempDirectory('gallery-upload-action-script-');
+        $scriptPath = $scriptDirectory . '/upload_r2.php';
+        file_put_contents($scriptPath, $this->phpUploadScriptStub($scriptDirectory . '/upload.log'));
+
+        try {
+            $app = createApp(
+                $catalogPath,
+                '/media',
+                $cache,
+                true,
+                '/media',
+                null,
+                null,
+                null,
+                null,
+                null,
+                $scriptPath,
+                PHP_BINARY,
+            );
+            $request = (new ServerRequestFactory())
+                ->createServerRequest('POST', '/upload')
+                ->withUploadedFiles([
+                    'file' => $this->uploadedFile($this->createTempDirectory('gallery-upload-action-source-'), 'source.png', 'source.png', $this->validPngContents()),
+                ]);
+
+            $response = $app->handle($request);
+            $events = $this->decodeNdjson((string) $response->getBody());
+            $completeEvent = $events[array_key_last($events)];
+
+            self::assertSame(200, $response->getStatusCode());
+            self::assertSame('application/x-ndjson', $response->getHeaderLine('Content-Type'));
+            self::assertSame('file', $events[0]['type']);
+            self::assertSame('source.png', $events[0]['file']['name']);
+            self::assertSame('output', $events[1]['type']);
+            self::assertSame('stub upload ok', $events[1]['line']);
+            self::assertSame('complete', $completeEvent['type']);
+            self::assertSame('source.png', $completeEvent['files'][0]['name']);
+            self::assertMatchesRegularExpression('#^source-\d{8}-\d{6}-[a-f0-9]{8}\.avif$#', $completeEvent['files'][0]['path']);
+            self::assertFileDoesNotExist(sys_get_temp_dir() . '/' . $events[0]['file']['path']);
+            self::assertSame(['stub upload ok'], $completeEvent['output']);
+            self::assertNull($cache->get('photos:r2'));
+            self::assertFileExists($qiniuUsageCache);
+            $catalog = json_decode((string) file_get_contents($catalogPath), true, 512, JSON_THROW_ON_ERROR);
+            self::assertCount(1, $catalog['items']);
+            self::assertSame($completeEvent['files'][0]['path'], $catalog['items'][0]['path']);
+        } finally {
+            @unlink($catalogPath);
+            $this->removeDirectory($cacheDirectory);
+            $this->removeDirectory($scriptDirectory);
+        }
+    }
+
+    public function testItExtractsNestedMultipartFilesField(): void
+    {
+        $catalogPath = $this->createTempCatalog('gallery-upload-action-catalog-');
+        $scriptDirectory = $this->createTempDirectory('gallery-upload-action-script-');
+        $scriptPath = $scriptDirectory . '/upload_r2.php';
+        file_put_contents($scriptPath, $this->phpUploadScriptStub($scriptDirectory . '/upload.log'));
+
+        try {
+            $app = createApp(
+                $catalogPath,
+                '/media',
+                null,
+                true,
+                '/media',
+                null,
+                null,
+                null,
+                null,
+                null,
+                $scriptPath,
+                PHP_BINARY,
+            );
+            $request = (new ServerRequestFactory())
+                ->createServerRequest('POST', '/upload')
+                ->withUploadedFiles([
+                    'files' => [
+                        'nested' => [$this->uploadedFile($this->createTempDirectory('gallery-upload-action-source-'), 'nested.png', 'nested.png', $this->validPngContents())],
+                    ],
+                ]);
+
+            $response = $app->handle($request);
+            $events = $this->decodeNdjson((string) $response->getBody());
+            $completeEvent = $events[array_key_last($events)];
+
+            self::assertSame(200, $response->getStatusCode());
+            self::assertSame('nested.png', $completeEvent['files'][0]['name']);
+        } finally {
+            @unlink($catalogPath);
+            $this->removeDirectory($scriptDirectory);
+        }
+    }
+
+    public function testItStreamsScriptFailureAndKeepsCache(): void
+    {
+        $catalogPath = $this->createTempCatalog('gallery-upload-action-catalog-');
+        $cacheDirectory = $this->createTempDirectory('gallery-upload-action-cache-');
+        $cache = new FilePhotoCache($cacheDirectory);
+        $cachedValue = [['id' => 'stale']];
+        $cache->put('photos:r2', $cachedValue, 300);
+
+        $scriptDirectory = $this->createTempDirectory('gallery-upload-action-script-');
+        $scriptPath = $scriptDirectory . '/upload_r2.php';
+        file_put_contents($scriptPath, $this->phpUploadScriptStub($scriptDirectory . '/upload.log', 7, "remote failed\n"));
+
+        try {
+            $app = createApp(
+                $catalogPath,
+                '/media',
+                $cache,
+                true,
+                '/media',
+                null,
+                null,
+                null,
+                null,
+                null,
+                $scriptPath,
+                PHP_BINARY,
+            );
+            $request = (new ServerRequestFactory())
+                ->createServerRequest('POST', '/upload')
+                ->withUploadedFiles([
+                    'file' => $this->uploadedFile($this->createTempDirectory('gallery-upload-action-source-'), 'source.png', 'source.png', $this->validPngContents()),
+                ]);
+
+            $response = $app->handle($request);
+            $events = $this->decodeNdjson((string) $response->getBody());
+            $errorEvent = $events[array_key_last($events)];
+
+            self::assertSame(200, $response->getStatusCode());
+            self::assertSame('output', $events[1]['type']);
+            self::assertSame('remote failed', $events[1]['line']);
+            self::assertSame('error', $errorEvent['type']);
+            self::assertSame("Remote upload failed:\nremote failed", $errorEvent['error']);
+            self::assertSame(['remote failed'], $errorEvent['output']);
+            self::assertSame($cachedValue, $cache->get('photos:r2'));
+        } finally {
+            @unlink($catalogPath);
+            $this->removeDirectory($cacheDirectory);
+            $this->removeDirectory($scriptDirectory);
+        }
+    }
+
+    public function testItSubstitutesInvalidUtf8ScriptOutputInStreamEvents(): void
+    {
+        $catalogPath = $this->createTempCatalog('gallery-upload-action-catalog-');
+        $scriptDirectory = $this->createTempDirectory('gallery-upload-action-script-');
+        $scriptPath = $scriptDirectory . '/upload_r2.php';
+        file_put_contents($scriptPath, $this->phpUploadScriptStub($scriptDirectory . '/upload.log', 0, "bad \xFF output\n"));
+
+        try {
+            $app = createApp(
+                $catalogPath,
+                '/media',
+                null,
+                true,
+                '/media',
+                null,
+                null,
+                null,
+                null,
+                null,
+                $scriptPath,
+                PHP_BINARY,
+            );
+            $request = (new ServerRequestFactory())
+                ->createServerRequest('POST', '/upload')
+                ->withUploadedFiles([
+                    'file' => $this->uploadedFile($this->createTempDirectory('gallery-upload-action-source-'), 'source.png', 'source.png', $this->validPngContents()),
+                ]);
+
+            $response = $app->handle($request);
+            $events = $this->decodeNdjson((string) $response->getBody());
+
+            self::assertSame(200, $response->getStatusCode());
+            self::assertSame('output', $events[1]['type']);
+            self::assertSame('bad � output', $events[1]['line']);
+        } finally {
+            @unlink($catalogPath);
+            $this->removeDirectory($scriptDirectory);
+        }
+    }
+
+    public function testItReturnsNoFilesValidationError(): void
+    {
+        $catalogPath = $this->createTempCatalog('gallery-upload-action-catalog-');
+        $app = createApp($catalogPath, '/media', null, true);
+        $request = (new ServerRequestFactory())->createServerRequest('POST', '/upload');
+
+        $response = $app->handle($request);
+        $payload = json_decode((string) $response->getBody(), true, 512, JSON_THROW_ON_ERROR);
+
+        self::assertSame(400, $response->getStatusCode());
+        self::assertSame(['error' => 'No image files were uploaded.'], $payload);
+
+        @unlink($catalogPath);
+    }
+
+    private function uploadedFile(string $directory, string $sourceName, string $clientName, string $contents): UploadedFile
+    {
+        if (!is_dir($directory)) {
+            mkdir($directory, 0777, true);
+        }
+
+        $path = $directory . '/' . $sourceName;
+        file_put_contents($path, $contents);
+
+        return new UploadedFile($path, $clientName, 'image/' . pathinfo($clientName, PATHINFO_EXTENSION), filesize($path), UPLOAD_ERR_OK);
+    }
+
+    private function validPngContents(): string
+    {
+        $contents = base64_decode(
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+XnB8AAAAASUVORK5CYII=',
+            true,
+        );
+        self::assertNotFalse($contents);
+
+        return $contents;
+    }
+
+    private function phpUploadScriptStub(string $logPath, int $exitCode = 0, string $output = "stub upload ok\n"): string
+    {
+        return sprintf(
+            <<<'PHP'
+<?php
+file_put_contents(%s, json_encode($argv, JSON_THROW_ON_ERROR));
+fwrite(STDOUT, %s);
+exit(%d);
+PHP,
+            var_export($logPath, true),
+            var_export($output, true),
+            $exitCode,
+        );
+    }
+
+    /**
+     * @return list<array<string,mixed>>
+     */
+    private function decodeNdjson(string $contents): array
+    {
+        return array_map(
+            static fn (string $line): array => json_decode($line, true, 512, JSON_THROW_ON_ERROR),
+            array_values(array_filter(explode("\n", trim($contents)), static fn (string $line): bool => $line !== '')),
+        );
+    }
+
+    private function createTempCatalog(string $prefix): string
+    {
+        $path = sys_get_temp_dir() . '/' . $prefix . bin2hex(random_bytes(4)) . '.json';
+        file_put_contents($path, json_encode([
+            'version' => 1,
+            'updatedAt' => gmdate(DATE_ATOM),
+            'items' => [],
+        ], JSON_THROW_ON_ERROR));
+
+        return $path;
+    }
+
+    private function createTempDirectory(string $prefix): string
+    {
+        $directory = sys_get_temp_dir() . '/' . $prefix . bin2hex(random_bytes(4));
+        mkdir($directory, 0777, true);
+
+        return $directory;
+    }
+
+    private function removeDirectory(string $directory): void
+    {
+        if (!file_exists($directory)) {
+            return;
+        }
+
+        $iterator = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($directory, RecursiveDirectoryIterator::SKIP_DOTS),
+            RecursiveIteratorIterator::CHILD_FIRST,
+        );
+
+        foreach ($iterator as $item) {
+            if ($item->isDir() && !$item->isLink()) {
+                rmdir($item->getPathname());
+
+                continue;
+            }
+
+            unlink($item->getPathname());
+        }
+
+        rmdir($directory);
+    }
+}

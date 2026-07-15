@@ -1,0 +1,257 @@
+import { useEffect, useRef, useState } from 'react';
+import type {
+  KeyboardEvent as ReactKeyboardEvent,
+  MouseEvent as ReactMouseEvent,
+  TouchEvent as ReactTouchEvent,
+} from 'react';
+import type { Photo } from '../../types/photo';
+import { getCachedPhotoImageUrl, markPhotoImageAsLoaded, preloadPhotoImage } from '../exhibition/WaterfallCard';
+
+type PhotoViewerModalProps = {
+  photos: Photo[];
+  selectedIndex: number;
+  onSelectIndex: (index: number) => void;
+  onClose: () => void;
+};
+
+const FOCUSABLE_SELECTOR = [
+  'button:not([disabled])',
+  '[href]',
+  'input:not([disabled])',
+  'select:not([disabled])',
+  'textarea:not([disabled])',
+  '[tabindex]:not([tabindex="-1"])',
+].join(', ');
+
+const SWIPE_THRESHOLD_PX = 48;
+
+export function PhotoViewerModal({ photos, selectedIndex, onSelectIndex, onClose }: PhotoViewerModalProps) {
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+  const previouslyFocusedElementRef = useRef<HTMLElement | null>(null);
+  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
+  const photo = photos[selectedIndex];
+  const [displayedImageUrl, setDisplayedImageUrl] = useState(() => (photo ? getCachedPhotoImageUrl(photo.id) ?? photo.url : ''));
+  const [loadedPhotoId, setLoadedPhotoId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (photo === undefined) {
+      return;
+    }
+
+    setDisplayedImageUrl(getCachedPhotoImageUrl(photo.id) ?? photo.url);
+    setLoadedPhotoId(null);
+  }, [photo?.id, photo?.url]);
+
+  useEffect(() => {
+    if (photo === undefined || loadedPhotoId !== photo.id) {
+      return;
+    }
+
+    const previousPhoto = photos[selectedIndex - 1];
+    const nextPhoto = photos[selectedIndex + 1];
+
+    if (previousPhoto !== undefined) {
+      preloadPhotoImage(previousPhoto.id, previousPhoto.url);
+    }
+
+    if (nextPhoto !== undefined) {
+      preloadPhotoImage(nextPhoto.id, nextPhoto.url);
+    }
+  }, [loadedPhotoId, photo, photos, selectedIndex]);
+
+  useEffect(() => {
+    previouslyFocusedElementRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    closeButtonRef.current?.focus();
+
+    return () => {
+      previouslyFocusedElementRef.current?.focus();
+    };
+  }, []);
+
+  if (selectedIndex < 0 || selectedIndex >= photos.length || photo === undefined) {
+    return null;
+  }
+
+  const isFirstPhoto = selectedIndex === 0;
+  const isLastPhoto = selectedIndex === photos.length - 1;
+
+  const selectPreviousPhoto = () => {
+    if (!isFirstPhoto) {
+      onSelectIndex(selectedIndex - 1);
+    }
+  };
+
+  const selectNextPhoto = () => {
+    if (!isLastPhoto) {
+      onSelectIndex(selectedIndex + 1);
+    }
+  };
+
+  const handleBackdropClick = (event: ReactMouseEvent<HTMLDivElement>) => {
+    if (event.target === event.currentTarget) {
+      onClose();
+    }
+  };
+
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Tab') {
+      const focusableElements = dialogRef.current
+        ? Array.from(dialogRef.current.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
+            (element) => !element.hasAttribute('disabled') && element.tabIndex !== -1,
+          )
+        : [];
+
+      if (focusableElements.length > 0) {
+        const firstFocusableElement = focusableElements[0];
+        const lastFocusableElement = focusableElements[focusableElements.length - 1];
+
+        if (event.shiftKey && document.activeElement === firstFocusableElement) {
+          event.preventDefault();
+          lastFocusableElement.focus();
+          return;
+        }
+
+        if (!event.shiftKey && document.activeElement === lastFocusableElement) {
+          event.preventDefault();
+          firstFocusableElement.focus();
+          return;
+        }
+      }
+    }
+
+    if (event.key === 'Escape') {
+      event.stopPropagation();
+      onClose();
+      return;
+    }
+
+    if (event.key === 'ArrowLeft') {
+      if (!isFirstPhoto) {
+        event.preventDefault();
+        selectPreviousPhoto();
+      }
+      return;
+    }
+
+    if (event.key === 'ArrowRight') {
+      if (!isLastPhoto) {
+        event.preventDefault();
+        selectNextPhoto();
+      }
+    }
+  };
+
+  const handleTouchStart = (event: ReactTouchEvent<HTMLDivElement>) => {
+    const touch = event.touches[0];
+
+    if (touch === undefined) {
+      return;
+    }
+
+    touchStartRef.current = { x: touch.clientX, y: touch.clientY };
+  };
+
+  const handleTouchEnd = (event: ReactTouchEvent<HTMLDivElement>) => {
+    const touchStart = touchStartRef.current;
+    const touch = event.changedTouches[0];
+
+    touchStartRef.current = null;
+
+    if (touchStart === null || touch === undefined) {
+      return;
+    }
+
+    const deltaX = touch.clientX - touchStart.x;
+    const deltaY = touch.clientY - touchStart.y;
+
+    if (Math.abs(deltaX) < SWIPE_THRESHOLD_PX || Math.abs(deltaX) <= Math.abs(deltaY)) {
+      return;
+    }
+
+    if (deltaX < 0) {
+      selectNextPhoto();
+      return;
+    }
+
+    selectPreviousPhoto();
+  };
+
+  const handleTouchCancel = () => {
+    touchStartRef.current = null;
+  };
+
+  return (
+    <div
+      ref={dialogRef}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4 py-6 text-white backdrop-blur-md md:px-8"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Image lightbox"
+      tabIndex={-1}
+      onClick={handleBackdropClick}
+      onKeyDown={handleKeyDown}
+      data-testid="lightbox-backdrop"
+    >
+      <button
+        ref={closeButtonRef}
+        type="button"
+        aria-label="Close image"
+        onClick={onClose}
+        className="absolute right-4 top-4 rounded-full bg-black/40 px-4 py-2 text-sm font-medium text-white backdrop-blur md:right-8 md:top-8"
+      >
+        Close
+      </button>
+
+      <button
+        type="button"
+        aria-label="Previous image"
+        disabled={isFirstPhoto}
+        onClick={selectPreviousPhoto}
+        className="absolute left-4 top-1/2 -translate-y-1/2 rounded-full bg-black/40 px-4 py-4 text-sm font-medium text-white backdrop-blur disabled:cursor-not-allowed disabled:opacity-30 md:left-8"
+      >
+        Prev
+      </button>
+
+      <div
+        className="flex max-h-full max-w-6xl flex-col items-center gap-4"
+        onClick={(event) => event.stopPropagation()}
+        onTouchStart={handleTouchStart}
+        onTouchEnd={handleTouchEnd}
+        onTouchCancel={handleTouchCancel}
+      >
+        <img
+          src={displayedImageUrl}
+          alt={photo.filename}
+          fetchPriority="high"
+          decoding="async"
+          width={photo.width ?? undefined}
+          height={photo.height ?? undefined}
+          className="max-h-[80vh] max-w-full object-contain"
+          onLoad={() => {
+            markPhotoImageAsLoaded(photo.id, displayedImageUrl);
+            setLoadedPhotoId(photo.id);
+          }}
+          onError={() => {
+            if (displayedImageUrl !== photo.url) {
+              setDisplayedImageUrl(photo.url);
+            }
+          }}
+        />
+        <p className="text-sm text-white/70">
+          {selectedIndex + 1} / {photos.length}
+        </p>
+      </div>
+
+      <button
+        type="button"
+        aria-label="Next image"
+        disabled={isLastPhoto}
+        onClick={selectNextPhoto}
+        className="absolute right-4 top-1/2 -translate-y-1/2 rounded-full bg-black/40 px-4 py-4 text-sm font-medium text-white backdrop-blur disabled:cursor-not-allowed disabled:opacity-30 md:right-8"
+      >
+        Next
+      </button>
+    </div>
+  );
+}

@@ -1,0 +1,7 @@
+vendor
+var/cache
+var/upload-batches
+.phpunit.cache
+.env
+tests
+phpunit.xml
