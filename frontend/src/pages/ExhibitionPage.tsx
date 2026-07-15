@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { BackToTopButton } from '../components/exhibition/BackToTopButton';
 import { ExhibitionHeader } from '../components/exhibition/ExhibitionHeader';
 import { ExhibitionHero } from '../components/exhibition/ExhibitionHero';
 import { ExhibitionSection } from '../components/exhibition/ExhibitionSection';
@@ -24,7 +25,8 @@ import type {
 } from '../utils/gallerySettings';
 import { LoadTrigger } from '../components/exhibition/LoadTrigger';
 import { PhotoViewerModal } from '../components/viewer/PhotoViewerModal';
-import { fetchPhotos } from '../services/photos';
+import { fetchPhotos, resetPhotoRequestCache } from '../services/photos';
+import { getScrollBehavior } from '../utils/motion';
 import { fetchMediaSourceStatuses } from '../services/mediaSources';
 import type { MediaSourceStatus } from '../services/mediaSources';
 import type { Photo } from '../types/photo';
@@ -264,6 +266,8 @@ export function ExhibitionPage() {
 
     const controller = new AbortController();
 
+    // Full load cycle: drop session cache so post-upload nav cannot pin a stale /api/photos snapshot.
+    resetPhotoRequestCache();
     setStatus('loading');
     setVisibleCount(getInitialVisiblePhotoCount(columnPreference));
 
@@ -352,6 +356,21 @@ export function ExhibitionPage() {
 
   const hasMorePhotos = visibleCount < sortedPhotos.length;
 
+  useEffect(() => {
+    if (status !== 'ready' || selectedPhotoId == null) {
+      return;
+    }
+
+    const exists = sortedPhotos.some((photo) => photo.id === selectedPhotoId);
+
+    if (exists) {
+      return;
+    }
+
+    setSelectedPhotoId(null);
+    writeSelectedPhotoId(null);
+  }, [selectedPhotoId, sortedPhotos, status]);
+
   const loadMore = useCallback(() => {
     if (!hasMorePhotos) {
       return;
@@ -391,6 +410,12 @@ export function ExhibitionPage() {
     setSelectedPhotoId(nextPhoto.id);
     writeSelectedPhotoId(nextPhoto.id);
   }, [sortedPhotos]);
+
+  const scrollToTop = useCallback(() => {
+    window.scrollTo({ top: 0, behavior: getScrollBehavior() });
+  }, []);
+
+  const isBackToTopVisible = !isAtTop && selectedIndex < 0;
 
   return (
     <>
@@ -443,6 +468,8 @@ export function ExhibitionPage() {
           )}
         </section>
       </main>
+
+      <BackToTopButton visible={isBackToTopVisible} onActivate={scrollToTop} />
 
       {isSettingsOpen && (
         <GallerySettingsModal

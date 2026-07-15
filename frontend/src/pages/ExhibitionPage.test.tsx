@@ -2,26 +2,27 @@ import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ExhibitionPage } from './ExhibitionPage';
-import { fetchPhotos } from '../services/photos';
+import { fetchPhotos, resetPhotoRequestCache } from '../services/photos';
 import { fetchMediaSourceStatuses } from '../services/mediaSources';
 import type { MediaSourceStatus } from '../services/mediaSources';
 import { GALLERY_MEDIA_SOURCE_VISIBILITY, GALLERY_SETTINGS_STORAGE_KEY } from '../utils/gallerySettings';
 
 vi.mock('../services/photos', () => ({
   fetchPhotos: vi.fn(),
+  resetPhotoRequestCache: vi.fn(),
 }));
 
 vi.mock('../services/mediaSources', () => ({
   fetchMediaSourceStatuses: vi.fn(),
 }));
 
-vi.mock('../utils/photoQuery', () => ({
-  readSelectedPhotoId: vi.fn(() => null),
-  writeSelectedPhotoId: vi.fn(),
-}));
-
 const mockedFetchPhotos = vi.mocked(fetchPhotos);
 const mockedFetchMediaSourceStatuses = vi.mocked(fetchMediaSourceStatuses);
+const mockedResetPhotoRequestCache = vi.mocked(resetPhotoRequestCache);
+
+function resetLocation(path = '/') {
+  window.history.replaceState(window.history.state, '', path);
+}
 
 class MockIntersectionObserver {
   static instances: MockIntersectionObserver[] = [];
@@ -165,12 +166,27 @@ describe('ExhibitionPage', () => {
     mockedFetchPhotos.mockImplementation(async () => photos);
     mockedFetchMediaSourceStatuses.mockReset();
     mockedFetchMediaSourceStatuses.mockResolvedValue(mediaSourceStatuses);
+    mockedResetPhotoRequestCache.mockReset();
     MockIntersectionObserver.instances = [];
     MockImage.requestedUrls = [];
     MockImage.failingUrls.clear();
     vi.stubGlobal('IntersectionObserver', MockIntersectionObserver);
     vi.stubGlobal('Image', MockImage);
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn().mockImplementation((query: string) => ({
+        matches: query === '(min-width: 768px)',
+        media: query,
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })),
+    );
     window.localStorage.clear();
+    resetLocation('/');
     GALLERY_MEDIA_SOURCE_VISIBILITY.r2 = true;
     GALLERY_MEDIA_SOURCE_VISIBILITY.qiniu = true;
     GALLERY_MEDIA_SOURCE_VISIBILITY.local = true;
@@ -187,6 +203,7 @@ describe('ExhibitionPage', () => {
   });
 
   afterEach(() => {
+    resetLocation('/');
     vi.restoreAllMocks();
   });
 
@@ -734,6 +751,159 @@ describe('ExhibitionPage', () => {
     expect(screen.getByRole('dialog', { name: 'Image lightbox' })).toBeInTheDocument();
   });
 
+  it('writes the selected photo id into the URL when a tile is opened', async () => {
+    const user = userEvent.setup();
+
+    render(<ExhibitionPage />);
+
+    await user.click(await screen.findByRole('button', { name: 'Open fresh.jpg' }));
+
+    expect(screen.getByRole('dialog', { name: 'Image lightbox' })).toBeInTheDocument();
+    expect(window.location.search).toBe('?photo=fresh');
+  });
+
+  it('clears the photo query param when the viewer closes', async () => {
+    const user = userEvent.setup();
+
+    render(<ExhibitionPage />);
+
+    await user.click(await screen.findByRole('button', { name: 'Open fresh.jpg' }));
+    expect(window.location.search).toBe('?photo=fresh');
+
+    await user.click(screen.getByRole('button', { name: 'Close image' }));
+
+    expect(screen.queryByRole('dialog', { name: 'Image lightbox' })).not.toBeInTheDocument();
+    expect(window.location.search).toBe('');
+  });
+
+  it('updates the photo query with replaceState when navigating to the next image', async () => {
+    const user = userEvent.setup();
+    const replaceState = vi.spyOn(window.history, 'replaceState');
+    const pushState = vi.spyOn(window.history, 'pushState');
+
+    render(<ExhibitionPage />);
+
+    await user.click(await screen.findByRole('button', { name: 'Open late-afternoon.jpg' }));
+    expect(window.location.search).toBe('?photo=late-afternoon');
+
+    replaceState.mockClear();
+    pushState.mockClear();
+
+    await user.click(screen.getByRole('button', { name: 'Next image' }));
+
+    expect(window.location.search).toBe('?photo=fresh');
+    expect(replaceState).toHaveBeenCalled();
+    expect(pushState).not.toHaveBeenCalled();
+  });
+
+  it('hydrates a valid deep-linked photo after photos load', async () => {
+    resetLocation('/?photo=fresh');
+
+    render(<ExhibitionPage />);
+
+    expect(await screen.findByRole('dialog', { name: 'Image lightbox' })).toBeInTheDocument();
+    expect(window.location.search).toBe('?photo=fresh');
+  });
+
+  it('ignores an unknown deep-linked photo id and clears the query', async () => {
+    resetLocation('/?photo=missing-work');
+
+    render(<ExhibitionPage />);
+
+    expect(await screen.findByRole('button', { name: 'Open late-afternoon.jpg' })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(window.location.search).toBe('');
+    });
+    expect(screen.queryByRole('dialog', { name: 'Image lightbox' })).not.toBeInTheDocument();
+  });
+
+  it('shows the back-to-top control after scrolling and scrolls to the top when activated', async () => {
+    const user = userEvent.setup();
+    const scrollTo = vi.fn();
+    window.scrollTo = scrollTo as typeof window.scrollTo;
+    window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
+
+    render(<ExhibitionPage />);
+
+    await screen.findByRole('button', { name: 'Open late-afternoon.jpg' });
+
+    const backToTop = screen.getByTestId('back-to-top');
+    expect(backToTop).toHaveAttribute('aria-hidden', 'true');
+
+    act(() => {
+      window.scrollY = 120;
+      window.dispatchEvent(new Event('scroll'));
+    });
+
+    expect(backToTop).toHaveAttribute('aria-hidden', 'false');
+    await user.click(backToTop);
+
+    expect(scrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'smooth' });
+  });
+
+  it('uses instant scroll for back-to-top when reduced motion is preferred', async () => {
+    const user = userEvent.setup();
+    const scrollTo = vi.fn();
+    window.scrollTo = scrollTo as typeof window.scrollTo;
+    window.matchMedia = vi.fn().mockImplementation((query: string) => ({
+      matches: query === '(prefers-reduced-motion: reduce)',
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
+
+    render(<ExhibitionPage />);
+
+    await screen.findByRole('button', { name: 'Open late-afternoon.jpg' });
+
+    const backToTop = screen.getByTestId('back-to-top');
+
+    act(() => {
+      window.scrollY = 120;
+      window.dispatchEvent(new Event('scroll'));
+    });
+
+    expect(backToTop).toHaveAttribute('aria-hidden', 'false');
+    await user.click(backToTop);
+
+    expect(scrollTo).toHaveBeenCalledWith({ top: 0, behavior: 'auto' });
+  });
+
+  it('hides the back-to-top control while the viewer is open', async () => {
+    const user = userEvent.setup();
+
+    render(<ExhibitionPage />);
+
+    await screen.findByRole('button', { name: 'Open late-afternoon.jpg' });
+
+    const backToTop = screen.getByTestId('back-to-top');
+
+    act(() => {
+      window.scrollY = 120;
+      window.dispatchEvent(new Event('scroll'));
+    });
+
+    expect(backToTop).toHaveAttribute('aria-hidden', 'false');
+
+    await user.click(screen.getByRole('button', { name: 'Open fresh.jpg' }));
+
+    expect(screen.getByRole('dialog', { name: 'Image lightbox' })).toBeInTheDocument();
+    expect(backToTop).toHaveAttribute('aria-hidden', 'true');
+  });
+
   it('shows a loading skeleton before photos resolve', async () => {
     window.localStorage.setItem(
       GALLERY_SETTINGS_STORAGE_KEY,
@@ -803,11 +973,14 @@ describe('ExhibitionPage', () => {
     expect(await screen.findByTestId('exhibition-status-error')).toBeInTheDocument();
     expect(screen.getByText('Unable to load the exhibition')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open upload' })).toHaveAttribute('href', '/upload');
+    expect(mockedResetPhotoRequestCache).toHaveBeenCalled();
+    const resetsBeforeRetry = mockedResetPhotoRequestCache.mock.calls.length;
 
     await user.click(screen.getByRole('button', { name: 'Retry' }));
 
     expect(await screen.findByRole('button', { name: 'Open late-afternoon.jpg' })).toBeInTheDocument();
     expect(mockedFetchPhotos).toHaveBeenCalledTimes(2);
+    expect(mockedResetPhotoRequestCache.mock.calls.length).toBeGreaterThan(resetsBeforeRetry);
   });
 
   it('aborts the previous request when the media source changes', async () => {
