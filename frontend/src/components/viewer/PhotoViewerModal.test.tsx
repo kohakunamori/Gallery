@@ -37,7 +37,7 @@ afterEach(() => {
 });
 
 describe('PhotoViewerModal', () => {
-  it('renders a minimal lightbox with image, page count, and basic navigation', async () => {
+  it('renders a polished lightbox with icon controls, meta, and basic navigation', async () => {
     const user = userEvent.setup();
     const onSelectIndex = vi.fn();
     const onClose = vi.fn();
@@ -56,15 +56,129 @@ describe('PhotoViewerModal', () => {
 
     expect(closeButton).toBeInTheDocument();
     expect(closeButton).toHaveFocus();
+    expect(closeButton.querySelector('svg')).not.toBeNull();
+    expect(within(lightbox).queryByText('Close')).not.toBeInTheDocument();
+    expect(within(lightbox).queryByText('Prev')).not.toBeInTheDocument();
+    expect(within(lightbox).queryByText('Next')).not.toBeInTheDocument();
     expect(within(lightbox).getByRole('img', { name: 'one.jpg' })).toBeInTheDocument();
+    expect(within(lightbox).getByText('one.jpg')).toBeInTheDocument();
     expect(within(lightbox).getByText('1 / 2')).toBeInTheDocument();
     expect(within(lightbox).getByRole('button', { name: 'Previous image' })).toBeDisabled();
+    expect(within(lightbox).getByRole('button', { name: 'Previous image' }).querySelector('svg')).not.toBeNull();
+    expect(within(lightbox).getByRole('button', { name: 'Next image' }).querySelector('svg')).not.toBeNull();
 
     await user.click(within(lightbox).getByRole('button', { name: 'Next image' }));
     expect(onSelectIndex).toHaveBeenCalledWith(1);
 
     await user.click(closeButton);
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows a loading affordance before the full-resolution image loads', () => {
+    render(
+      <PhotoViewerModal
+        photos={photos}
+        selectedIndex={0}
+        onSelectIndex={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId('lightbox-loading')).toBeInTheDocument();
+    expect(screen.queryByTestId('lightbox-error')).not.toBeInTheDocument();
+
+    fireEvent.load(screen.getByRole('img', { name: 'one.jpg' }));
+
+    expect(screen.queryByTestId('lightbox-loading')).not.toBeInTheDocument();
+  });
+
+  it('keeps a loading affordance while holding the previous image during navigation', () => {
+    const { rerender } = render(
+      <PhotoViewerModal
+        photos={photos}
+        selectedIndex={0}
+        onSelectIndex={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    fireEvent.load(screen.getByRole('img', { name: 'one.jpg' }));
+    expect(screen.queryByTestId('lightbox-loading')).not.toBeInTheDocument();
+
+    rerender(
+      <PhotoViewerModal
+        photos={photos}
+        selectedIndex={1}
+        onSelectIndex={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId('lightbox-loading')).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'two.jpg' })).toHaveClass('opacity-0');
+
+    fireEvent.load(screen.getByRole('img', { name: 'two.jpg' }));
+
+    expect(screen.queryByTestId('lightbox-loading')).not.toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'two.jpg' })).toHaveClass('opacity-100');
+  });
+
+  it('shows an unavailable state after the cache-to-url fallback fails', () => {
+    cachePhotoImageForTest('one', 'https://r2.example.com/one.jpg');
+
+    render(
+      <PhotoViewerModal
+        photos={[
+          {
+            ...photos[0],
+            url: 'https://qiniu.example.com/one.jpg',
+          },
+          photos[1],
+        ]}
+        selectedIndex={0}
+        onSelectIndex={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const image = screen.getByRole('img', { name: 'one.jpg' });
+    expect(image).toHaveAttribute('src', 'https://r2.example.com/one.jpg');
+
+    fireEvent.error(image);
+
+    const fallbackImage = screen.getByRole('img', { name: 'one.jpg' });
+    expect(fallbackImage).toHaveAttribute('src', 'https://qiniu.example.com/one.jpg');
+    expect(screen.queryByTestId('lightbox-error')).not.toBeInTheDocument();
+
+    fireEvent.error(fallbackImage);
+
+    expect(screen.getByTestId('lightbox-error')).toBeInTheDocument();
+    expect(screen.getByText('Image unavailable')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    expect(screen.queryByRole('img', { name: 'one.jpg' })).not.toBeInTheDocument();
+  });
+
+  it('retries loading after a failed image', async () => {
+    const user = userEvent.setup();
+
+    render(
+      <PhotoViewerModal
+        photos={photos}
+        selectedIndex={0}
+        onSelectIndex={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    fireEvent.error(screen.getByRole('img', { name: 'one.jpg' }));
+
+    expect(screen.getByText('Image unavailable')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+
+    expect(screen.getByTestId('lightbox-loading')).toBeInTheDocument();
+    expect(screen.queryByTestId('lightbox-error')).not.toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'one.jpg' })).toHaveAttribute('src', '/media/one.jpg');
   });
 
   it('closes the lightbox when Escape is pressed', async () => {
@@ -127,15 +241,12 @@ describe('PhotoViewerModal', () => {
       />,
     );
 
-    const firstImage = screen.getByRole('img', { name: 'one.jpg' });
-    const firstContent = firstImage.parentElement;
+    const content = screen.getByTestId('lightbox-content');
 
-    expect(firstContent).not.toBeNull();
-
-    fireEvent.touchStart(firstContent as HTMLElement, {
+    fireEvent.touchStart(content, {
       touches: [{ clientX: 220, clientY: 120 }],
     });
-    fireEvent.touchEnd(firstContent as HTMLElement, {
+    fireEvent.touchEnd(content, {
       changedTouches: [{ clientX: 120, clientY: 128 }],
     });
 
@@ -152,15 +263,10 @@ describe('PhotoViewerModal', () => {
 
     onSelectIndex.mockClear();
 
-    const secondImage = screen.getByRole('img', { name: 'two.jpg' });
-    const secondContent = secondImage.parentElement;
-
-    expect(secondContent).not.toBeNull();
-
-    fireEvent.touchStart(secondContent as HTMLElement, {
+    fireEvent.touchStart(content, {
       touches: [{ clientX: 120, clientY: 120 }],
     });
-    fireEvent.touchEnd(secondContent as HTMLElement, {
+    fireEvent.touchEnd(content, {
       changedTouches: [{ clientX: 220, clientY: 128 }],
     });
 
@@ -179,22 +285,19 @@ describe('PhotoViewerModal', () => {
       />,
     );
 
-    const image = screen.getByRole('img', { name: 'one.jpg' });
-    const content = image.parentElement;
+    const content = screen.getByTestId('lightbox-content');
 
-    expect(content).not.toBeNull();
-
-    fireEvent.touchStart(content as HTMLElement, {
+    fireEvent.touchStart(content, {
       touches: [{ clientX: 200, clientY: 100 }],
     });
-    fireEvent.touchEnd(content as HTMLElement, {
+    fireEvent.touchEnd(content, {
       changedTouches: [{ clientX: 170, clientY: 104 }],
     });
 
-    fireEvent.touchStart(content as HTMLElement, {
+    fireEvent.touchStart(content, {
       touches: [{ clientX: 200, clientY: 100 }],
     });
-    fireEvent.touchEnd(content as HTMLElement, {
+    fireEvent.touchEnd(content, {
       changedTouches: [{ clientX: 170, clientY: 220 }],
     });
 
@@ -314,5 +417,44 @@ describe('PhotoViewerModal', () => {
 
     await user.keyboard('{Tab}');
     expect(closeButton).toHaveFocus();
+  });
+
+  it('restores focus to the previously focused element on close', async () => {
+    const opener = document.createElement('button');
+    opener.type = 'button';
+    opener.textContent = 'Open one.jpg';
+    document.body.append(opener);
+    opener.focus();
+
+    const { unmount } = render(
+      <PhotoViewerModal
+        photos={photos}
+        selectedIndex={0}
+        onSelectIndex={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(within(screen.getByRole('dialog', { name: 'Image lightbox' })).getByRole('button', { name: 'Close image' })).toHaveFocus();
+
+    unmount();
+    expect(opener).toHaveFocus();
+
+    opener.remove();
+  });
+
+  it('applies reduced-motion friendly transition classes on the image', () => {
+    render(
+      <PhotoViewerModal
+        photos={photos}
+        selectedIndex={0}
+        onSelectIndex={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const image = screen.getByRole('img', { name: 'one.jpg' });
+    expect(image.className).toContain('transition-opacity');
+    expect(image.className).toContain('motion-reduce:transition-none');
   });
 });
