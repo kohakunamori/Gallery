@@ -203,10 +203,55 @@ python script/import_r2_catalog.py \
   --local-dir "D:/path/to/originals"
 ```
 
-## 6. Notes
+## 6. Upload route routing
+
+Frontend nginx splits `/upload` by HTTP method. Do not treat every `/upload` request as a backend call.
+
+| Method | Handled by | Purpose |
+| --- | --- | --- |
+| `GET` / `HEAD` | SPA (`index.html` via frontend nginx rewrite) | Browser opens the upload page |
+| `POST` | backend (`gallery-backend`) | Multipart upload API |
+
+Relevant config: `frontend/docker/nginx.conf` (`location = /upload`). Dev Vite proxy uses the same rule: only `POST` is forwarded; other methods serve the SPA.
+
+### After the nginx SPA fix (`17f913a`)
+
+`GET /upload` used to be proxied to PHP and could return **500**. The fix lives in the **frontend** image. After that commit (or any later `master` tip that includes it), operators must pull a new `gallery-frontend` image — pulling backend alone is not enough:
+
+```bash
+cd ~/gallery   # or repo root
+./scripts/deploy.sh              # pulls both images tagged :latest
+# or pin the same build for both:
+# ./scripts/deploy.sh sha-<git>
+```
+
+Manual equivalent:
+
+```bash
+docker compose pull
+docker compose up -d
+# or:
+docker pull ghcr.io/kohakunamori/gallery-frontend:latest
+docker pull ghcr.io/kohakunamori/gallery-backend:latest
+```
+
+### GHCR tags
+
+Both `gallery-frontend` and `gallery-backend` are published with the same tag set on every push to `master`/`main`:
+
+| Tag | Meaning |
+| --- | --- |
+| `latest` | Tip of the default branch only |
+| `sha-<full-git-sha>` | Immutable full commit SHA |
+| `sha-<short-sha>` | Immutable short commit SHA |
+| branch name (`master` / `main`) | Moving branch tip |
+
+Prefer `sha-*` when you need a pin; use `latest` or `./scripts/deploy.sh` for routine updates. Packages are public — `docker pull` does not require login.
+
+## 7. Notes
 
 - Backend image includes PHP + Apache, Python, and `upload_r2.py` so upload works inside the container.
-- Frontend does **not** embed API secrets; only the backend needs `upload_r2.env`.
+- Frontend does **not** embed API secrets; only the backend needs `upload_r2.env`. Never commit real `upload_r2.env`, tokens, or runtime catalogs into git.
 - Upload path: image bytes go to **R2 only** by default (`--target r2`).
 - `photos-index.json` updates:
   - **Same machine as API**: set `PHOTO_CATALOG_PATH` / `--catalog` (local merge).

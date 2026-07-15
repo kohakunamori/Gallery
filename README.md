@@ -12,12 +12,14 @@ A lightweight personal photo exhibition: React frontend + Slim PHP API, with **i
 Browser
   └─ frontend (nginx SPA)
        ├─ /api/* , POST /upload  →  backend (Slim PHP)
-       ├─ GET /upload            →  SPA upload page
+       ├─ GET / HEAD /upload     →  SPA upload page (nginx rewrite)
        └─ image URLs             →  R2 / CDN  (MEDIA_BASE_URL)
 
 Catalog (host file, mounted into backend):
   ${GALLERY_DATA_HOST_PATH}/photos-index.json
 ```
+
+**`/upload` routing:** browsers open the upload UI with `GET`/`HEAD` (served by the frontend SPA). Only `POST /upload` is proxied to the PHP API. After the nginx SPA fix (`17f913a`), pull a fresh `gallery-frontend` image — backend-only updates do not fix `GET /upload`. See [docs/DEPLOY.md](docs/DEPLOY.md) § “Upload route routing”.
 
 | Piece | Role |
 | --- | --- |
@@ -116,7 +118,7 @@ cd script   && python -m unittest tests.test_upload_r2
 
 ### Web UI
 
-Open `/upload` (set `UPLOAD_ACCESS_TOKEN` if you use one). Files are staged temporarily, uploaded to **R2**, and merged into `photos-index.json` by path (existing entries are kept).
+Open `/upload` in the browser (`GET` loads the SPA upload page; only `POST /upload` hits the API). Set `UPLOAD_ACCESS_TOKEN` if you use one. Files are staged temporarily, uploaded to **R2**, and merged into `photos-index.json` by path (existing entries are kept).
 
 ### CLI (`script/upload_r2.py`)
 
