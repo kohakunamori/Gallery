@@ -1,21 +1,64 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { UploadPage } from './UploadPage';
 import { uploadPhotos } from '../services/uploadPhotos';
+import { resetPhotoRequestCache } from '../services/photos';
 
 vi.mock('../services/uploadPhotos', () => ({
   uploadPhotos: vi.fn(),
 }));
 
+vi.mock('../services/photos', () => ({
+  resetPhotoRequestCache: vi.fn(),
+}));
+
 const mockedUploadPhotos = vi.mocked(uploadPhotos);
+const mockedResetPhotoRequestCache = vi.mocked(resetPhotoRequestCache);
+
+function createDataTransfer(files: File[]) {
+  return {
+    files,
+    items: files.map((file) => ({
+      kind: 'file',
+      type: file.type,
+      getAsFile: () => file,
+    })),
+    types: ['Files'],
+    dropEffect: 'none',
+    effectAllowed: 'all',
+  };
+}
 
 describe('UploadPage', () => {
-  afterEach(() => {
-    vi.clearAllMocks();
+  beforeEach(() => {
+    if (typeof URL.createObjectURL !== 'function') {
+      Object.defineProperty(URL, 'createObjectURL', {
+        configurable: true,
+        writable: true,
+        value: vi.fn(() => 'blob:preview'),
+      });
+    } else {
+      vi.spyOn(URL, 'createObjectURL').mockImplementation(() => 'blob:preview');
+    }
+
+    if (typeof URL.revokeObjectURL !== 'function') {
+      Object.defineProperty(URL, 'revokeObjectURL', {
+        configurable: true,
+        writable: true,
+        value: vi.fn(),
+      });
+    } else {
+      vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    }
   });
 
-  it('previews selected file metadata and uploads the files', async () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+    vi.restoreAllMocks();
+  });
+
+  it('previews selected files in a grid and uploads them', async () => {
     const user = userEvent.setup();
     const avifFile = new File(['avif-body'], 'new art.avif', { type: 'image/avif' });
     const webpFile = new File(['webp-body'], 'batch.webp', { type: 'image/webp' });
@@ -39,23 +82,149 @@ describe('UploadPage', () => {
     await user.type(screen.getByLabelText(/Upload token/i), 'secret-token');
     await user.upload(screen.getByLabelText(/Choose image files/i), [avifFile, webpFile]);
 
-    expect(screen.getByText('new art.avif')).toBeInTheDocument();
-    expect(screen.getByText('batch.webp')).toBeInTheDocument();
+    const previewGrid = screen.getByTestId('upload-preview-grid');
+    expect(within(previewGrid).getByText('new art.avif')).toBeInTheDocument();
+    expect(within(previewGrid).getByText('batch.webp')).toBeInTheDocument();
     expect(screen.getByText(/2 files/i)).toBeInTheDocument();
+    expect(previewGrid.querySelectorAll('img')).toHaveLength(2);
 
     await user.click(screen.getByRole('button', { name: /Upload selected files/i }));
 
     await waitFor(() => {
-      expect(mockedUploadPhotos).toHaveBeenCalledWith([avifFile, webpFile], expect.objectContaining({
-        onOutput: expect.any(Function),
-        signal: expect.any(AbortSignal),
-        uploadToken: 'secret-token',
-      }));
+      expect(mockedUploadPhotos).toHaveBeenCalledWith(
+        [avifFile, webpFile],
+        expect.objectContaining({
+          onOutput: expect.any(Function),
+          signal: expect.any(AbortSignal),
+          uploadToken: 'secret-token',
+        }),
+      );
     });
+
     expect(await screen.findByText('Upload complete')).toBeInTheDocument();
-    expect(screen.getByText(/Published as uploads\/new-art\.avif/i)).toBeInTheDocument();
-    expect(screen.getByText(/uploaded r2/)).toBeInTheDocument();
-    expect(screen.getByText(/uploaded qiniu/)).toBeInTheDocument();
+    expect(screen.getByText(/Published 2 images/i)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /View gallery/i })).toHaveAttribute('href', '/');
+    expect(screen.getByRole('button', { name: /Upload more/i })).toBeInTheDocument();
+    expect(mockedResetPhotoRequestCache).toHaveBeenCalled();
+
+    const technicalLog = screen.getByTestId('technical-log');
+    expect(technicalLog).toBeInTheDocument();
+    expect(technicalLog).not.toHaveAttribute('open');
+    expect(within(technicalLog).getByText(/uploaded r2/)).toBeInTheDocument();
+    expect(within(technicalLog).getByText(/uploaded qiniu/)).toBeInTheDocument();
+    expect(screen.queryByText(/Published as uploads\//i)).not.toBeInTheDocument();
+  });
+
+  it('stages dropped files into the preview grid', async () => {
+    const file = new File(['image-body'], 'dropped.webp', { type: 'image/webp' });
+
+    render(<UploadPage />);
+
+    const dropzone = screen.getByTestId('upload-dropzone');
+    fireEvent.drop(dropzone, { dataTransfer: createDataTransfer([file]) });
+
+    const previewGrid = await screen.findByTestId('upload-preview-grid');
+    expect(within(previewGrid).getByText('dropped.webp')).toBeInTheDocument();
+    expect(screen.getByText(/1 file/i)).toBeInTheDocument();
+  });
+
+  it('appends dropped files to an existing selection', async () => {
+    const user = userEvent.setup();
+    const first = new File(['a'], 'first.webp', { type: 'image/webp' });
+    const second = new File(['b'], 'second.webp', { type: 'image/webp' });
+
+    render(<UploadPage />);
+
+    await user.upload(screen.getByLabelText(/Choose image files/i), first);
+    fireEvent.drop(screen.getByTestId('upload-dropzone'), {
+      dataTransfer: createDataTransfer([second]),
+    });
+
+    const previewGrid = screen.getByTestId('upload-preview-grid');
+    expect(within(previewGrid).getByText('first.webp')).toBeInTheDocument();
+    expect(within(previewGrid).getByText('second.webp')).toBeInTheDocument();
+    expect(screen.getByText(/2 files/i)).toBeInTheDocument();
+  });
+
+  it('ignores unsupported dropped files with a calm message', () => {
+    const textFile = new File(['nope'], 'notes.txt', { type: 'text/plain' });
+
+    render(<UploadPage />);
+
+    fireEvent.drop(screen.getByTestId('upload-dropzone'), {
+      dataTransfer: createDataTransfer([textFile]),
+    });
+
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'None of the dropped files are supported image types.',
+    );
+    expect(screen.queryByTestId('upload-preview-grid')).not.toBeInTheDocument();
+  });
+
+  it('shows a calm message when the file picker yields only unsupported types', () => {
+    const textFile = new File(['nope'], 'notes.txt', { type: 'text/plain' });
+
+    render(<UploadPage />);
+
+    // Bypass the accept attribute so we can assert client-side filtering + messaging.
+    fireEvent.change(screen.getByLabelText(/Choose image files/i), {
+      target: { files: [textFile] },
+    });
+
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'None of the selected files are supported image types.',
+    );
+    expect(screen.queryByTestId('upload-preview-grid')).not.toBeInTheDocument();
+  });
+
+  it('removes individual staged files and updates counts', async () => {
+    const user = userEvent.setup();
+    const first = new File(['a'], 'keep.webp', { type: 'image/webp' });
+    const second = new File(['b'], 'remove-me.webp', { type: 'image/webp' });
+
+    mockedUploadPhotos.mockResolvedValue({
+      files: [{ name: 'keep.webp', path: 'uploads/keep.webp', size: first.size }],
+      output: [],
+    });
+
+    render(<UploadPage />);
+
+    await user.upload(screen.getByLabelText(/Choose image files/i), [first, second]);
+    expect(screen.getByText(/2 files/i)).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /Remove remove-me\.webp/i }));
+
+    expect(screen.queryByText('remove-me.webp')).not.toBeInTheDocument();
+    expect(screen.getByText('keep.webp')).toBeInTheDocument();
+    expect(screen.getByText(/1 file/i)).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /Upload selected files/i }));
+
+    await waitFor(() => {
+      expect(mockedUploadPhotos).toHaveBeenCalledWith([first], expect.any(Object));
+    });
+  });
+
+  it('resets the staging UI when Upload more is chosen after success', async () => {
+    const user = userEvent.setup();
+    const file = new File(['image-body'], 'source.webp', { type: 'image/webp' });
+
+    mockedUploadPhotos.mockResolvedValue({
+      files: [{ name: 'source.webp', path: 'uploads/source.webp', size: file.size }],
+      output: ['done'],
+    });
+
+    render(<UploadPage />);
+
+    await user.upload(screen.getByLabelText(/Choose image files/i), file);
+    await user.click(screen.getByRole('button', { name: /Upload selected files/i }));
+    expect(await screen.findByText('Upload complete')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /Upload more/i }));
+
+    expect(screen.queryByText('Upload complete')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('upload-preview-grid')).not.toBeInTheDocument();
+    expect(screen.getByTestId('upload-dropzone')).toBeInTheDocument();
   });
 
   it('shows a useful error when no file is selected', async () => {
@@ -73,7 +242,10 @@ describe('UploadPage', () => {
     render(<UploadPage />);
 
     expect(screen.getByText(/Supported extensions:/)).not.toHaveTextContent('svg');
-    expect(screen.getByLabelText(/Choose image files/i)).not.toHaveAttribute('accept', expect.stringContaining('.svg'));
+    expect(screen.getByLabelText(/Choose image files/i)).not.toHaveAttribute(
+      'accept',
+      expect.stringContaining('.svg'),
+    );
   });
 
   it('shows live script output while uploading', async () => {
@@ -97,14 +269,16 @@ describe('UploadPage', () => {
     await user.click(screen.getByRole('button', { name: /Upload selected files/i }));
 
     expect(await screen.findByText('streamed r2 line')).toBeInTheDocument();
+    expect(screen.getByTestId('technical-log')).toHaveAttribute('open');
     expect(screen.getByRole('button', { name: /Uploading/i })).toBeDisabled();
     expect(screen.getByRole('button', { name: /Cancel upload/i })).toBeInTheDocument();
+    expect(screen.getByTestId('upload-dropzone')).toHaveAttribute('aria-disabled', 'true');
 
     resolveUpload?.({ files: [], output: ['streamed r2 line'] });
     expect(await screen.findByText('Upload complete')).toBeInTheDocument();
   });
 
-  it('shows backend errors and keeps streamed output visible', async () => {
+  it('shows backend errors and keeps streamed output inspectable', async () => {
     const user = userEvent.setup();
     const file = new File(['image-body'], 'source.webp', { type: 'image/webp' });
 
@@ -123,17 +297,23 @@ describe('UploadPage', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('Remote upload failed.');
     expect(screen.getByText('remote failed log')).toBeInTheDocument();
+    expect(screen.getByTestId('technical-log')).toHaveAttribute('open');
   });
 
   it('cancels an active upload without showing a failure alert', async () => {
     const user = userEvent.setup();
     const file = new File(['image-body'], 'source.webp', { type: 'image/webp' });
 
-    mockedUploadPhotos.mockImplementation((_files, options) => new Promise((_resolve, reject) => {
-      if (options !== undefined && !('aborted' in options)) {
-        options.signal?.addEventListener('abort', () => reject(new DOMException('Canceled', 'AbortError')));
-      }
-    }));
+    mockedUploadPhotos.mockImplementation(
+      (_files, options) =>
+        new Promise((_resolve, reject) => {
+          if (options !== undefined && !('aborted' in options)) {
+            options.signal?.addEventListener('abort', () =>
+              reject(new DOMException('Canceled', 'AbortError')),
+            );
+          }
+        }),
+    );
 
     render(<UploadPage />);
 
@@ -145,10 +325,9 @@ describe('UploadPage', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
-  it('aborts the active upload when selected files change', async () => {
+  it('disables adding files while an upload is in progress', async () => {
     const user = userEvent.setup();
     const firstFile = new File(['image-body'], 'source.webp', { type: 'image/webp' });
-    const secondFile = new File(['image-body'], 'next.webp', { type: 'image/webp' });
     let signal: AbortSignal | undefined;
 
     mockedUploadPhotos.mockImplementation((_files, options) => {
@@ -166,10 +345,9 @@ describe('UploadPage', () => {
     await user.click(screen.getByRole('button', { name: /Upload selected files/i }));
     await waitFor(() => expect(signal).toBeDefined());
 
-    await user.upload(fileInput, secondFile);
-
-    expect(signal?.aborted).toBe(true);
-    expect(screen.getByText('next.webp')).toBeInTheDocument();
+    expect(fileInput).toBeDisabled();
+    expect(screen.getByTestId('upload-dropzone')).toHaveAttribute('aria-disabled', 'true');
+    expect(signal?.aborted).toBe(false);
   });
 
   it('caps visible script output', async () => {
@@ -194,5 +372,14 @@ describe('UploadPage', () => {
     expect(await screen.findByText(/Showing the last 200 lines/)).toBeInTheDocument();
     expect(screen.queryByText('line-0')).not.toBeInTheDocument();
     expect(screen.getByText(/line-200/)).toBeInTheDocument();
+  });
+
+  it('uses calm product copy without internal implementation paths', () => {
+    render(<UploadPage />);
+
+    expect(screen.getByRole('heading', { name: /Add images to the gallery/i })).toBeInTheDocument();
+    expect(screen.getByTestId('upload-dropzone')).toHaveTextContent(/Drop images here or browse/i);
+    expect(screen.queryByText(/photos-index\.json/i)).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/object storage/i);
   });
 });
