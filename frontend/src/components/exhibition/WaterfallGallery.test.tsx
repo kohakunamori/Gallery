@@ -1,20 +1,26 @@
 import { describe, expect, it } from 'vitest';
 import {
+  COLUMN_GAP_PX,
   distributePhotosIntoColumns,
+  estimateColumnWidth,
+  getColumnLayoutMetrics,
   getImageReleaseRootMargin,
   getImageRootMargin,
   getInitialVisibleCount,
   getLoadMoreCount,
   getLoadTriggerRootMargin,
+  getPhotoAspectHeight,
   getPreloadPhotoIds,
   getPreloadWindowSize,
   getPriorityPhotoCount,
   getPriorityPhotoIds,
+  getVisibleItemRange,
   resolveColumnCount,
   shouldReleaseOffscreenImages,
 } from './WaterfallGallery';
+import type { Photo } from '../../types/photo';
 
-const photos = [
+const photos: Photo[] = [
   {
     id: 'one',
     filename: 'one.jpg',
@@ -56,6 +62,19 @@ const photos = [
     height: 1000,
   },
 ];
+
+function buildTallColumn(count: number): Photo[] {
+  return Array.from({ length: count }, (_, index) => ({
+    id: `photo-${index}`,
+    filename: `photo-${index}.jpg`,
+    url: `/media/photo-${index}.jpg`,
+    thumbnailUrl: `/media/photo-${index}.jpg`,
+    takenAt: null,
+    sortTime: `2026-04-01T${String(index).padStart(2, '0')}:00:00Z`,
+    width: 1000,
+    height: 1500,
+  }));
+}
 
 describe('WaterfallGallery helpers', () => {
   it('resolves auto column count from viewport width', () => {
@@ -153,5 +172,52 @@ describe('WaterfallGallery helpers', () => {
 
     expect(getPreloadPhotoIds(columns, new Set(['one']), 4)).toEqual(['four']);
     expect(getPreloadPhotoIds(columns, new Set(['one', 'two']), 1)).toEqual(['four']);
+  });
+
+  it('derives aspect height with a 3/4 fallback', () => {
+    expect(getPhotoAspectHeight(photos[0]!)).toBe(1.5);
+    expect(
+      getPhotoAspectHeight({
+        ...photos[0]!,
+        width: null,
+        height: null,
+      }),
+    ).toBe(0.75);
+  });
+
+  it('builds stable cumulative column layout metrics from aspect ratios', () => {
+    const layout = getColumnLayoutMetrics(photos, 200, COLUMN_GAP_PX);
+
+    expect(layout.items).toHaveLength(4);
+    expect(layout.items[0]).toEqual({ top: 0, height: 300, bottom: 300 });
+    expect(layout.items[1]?.top).toBe(300 + COLUMN_GAP_PX);
+    expect(layout.items[1]?.height).toBeCloseTo((900 / 1600) * 200);
+    expect(layout.totalHeight).toBe(layout.items[3]!.bottom);
+    expect(layout.totalHeight).toBeGreaterThan(layout.items[3]!.height);
+  });
+
+  it('windows column items to the overscan range only', () => {
+    const tallColumn = buildTallColumn(20);
+    const layout = getColumnLayoutMetrics(tallColumn, 200, COLUMN_GAP_PX);
+    const firstHeight = layout.items[0]!.height;
+    const step = firstHeight + COLUMN_GAP_PX;
+
+    // Window that covers roughly items 3-5 (with partial overscan edges).
+    const range = getVisibleItemRange(layout.items, step * 3, step * 3 + firstHeight * 2);
+
+    expect(range.start).toBe(3);
+    expect(range.end).toBe(5);
+    expect(range.end - range.start).toBeLessThan(tallColumn.length);
+
+    expect(getVisibleItemRange([], 0, 1000)).toEqual({ start: 0, end: 0 });
+    expect(getVisibleItemRange(layout.items, 10_000, 20_000)).toEqual({
+      start: layout.items.length,
+      end: layout.items.length,
+    });
+  });
+
+  it('estimates a positive column width from viewport and column count', () => {
+    expect(estimateColumnWidth(1280, 4)).toBeGreaterThan(200);
+    expect(estimateColumnWidth(375, 1)).toBeGreaterThan(200);
   });
 });

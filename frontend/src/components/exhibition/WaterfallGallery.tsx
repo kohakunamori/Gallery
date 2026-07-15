@@ -10,8 +10,30 @@ type WaterfallGalleryProps = {
   onOpen: (photoId: string) => void;
 };
 
+export type ColumnItemMetric = {
+  top: number;
+  height: number;
+  bottom: number;
+};
+
+export type ColumnLayoutMetrics = {
+  items: ColumnItemMetric[];
+  totalHeight: number;
+};
+
+export type VisibleItemRange = {
+  start: number;
+  end: number;
+};
+
 const AUTO_COLUMN_TARGET_WIDTH = 360;
 const MAX_AUTO_COLUMN_COUNT = 6;
+/** Matches Tailwind `gap-2` (0.5rem at default root font size). */
+export const COLUMN_GAP_PX = 8;
+/** Extra pixels above/below the viewport to keep mounted while scrolling. */
+export const COLUMN_OVERSCAN_PX = 800;
+const DEFAULT_VIEWPORT_WIDTH = 1280;
+const MIN_COLUMN_WIDTH_PX = 1;
 
 export function getAutoColumnCount(viewportWidth: number) {
   const safeViewportWidth = Math.max(viewportWidth, AUTO_COLUMN_TARGET_WIDTH);
@@ -23,6 +45,14 @@ export function getAutoColumnCount(viewportWidth: number) {
 
 export function resolveColumnCount(viewportWidth: number, columnPreference: GalleryColumnPreference) {
   return columnPreference === 'auto' ? getAutoColumnCount(viewportWidth) : clampGalleryColumnCount(columnPreference);
+}
+
+export function getPhotoAspectHeight(photo: Photo) {
+  if (photo.width !== null && photo.height !== null && photo.width > 0 && photo.height > 0) {
+    return photo.height / photo.width;
+  }
+
+  return 3 / 4;
 }
 
 export function distributePhotosIntoColumns(photos: Photo[], columnCount: number) {
@@ -40,16 +70,77 @@ export function distributePhotosIntoColumns(photos: Photo[], columnCount: number
     }
 
     columns[targetColumnIndex].push(photo);
-
-    const aspectHeight =
-      photo.width !== null && photo.height !== null && photo.width > 0 && photo.height > 0
-        ? photo.height / photo.width
-        : 3 / 4;
-
-    columnHeights[targetColumnIndex] += aspectHeight;
+    columnHeights[targetColumnIndex] += getPhotoAspectHeight(photo);
   }
 
   return columns;
+}
+
+export function getColumnLayoutMetrics(
+  photos: Photo[],
+  columnWidth: number,
+  gapPx: number = COLUMN_GAP_PX,
+): ColumnLayoutMetrics {
+  const safeColumnWidth = Math.max(columnWidth, MIN_COLUMN_WIDTH_PX);
+  const items: ColumnItemMetric[] = [];
+  let offset = 0;
+
+  for (let index = 0; index < photos.length; index += 1) {
+    const height = getPhotoAspectHeight(photos[index]!) * safeColumnWidth;
+    items.push({
+      top: offset,
+      height,
+      bottom: offset + height,
+    });
+    offset += height;
+
+    if (index < photos.length - 1) {
+      offset += gapPx;
+    }
+  }
+
+  return {
+    items,
+    totalHeight: offset,
+  };
+}
+
+/**
+ * Returns an inclusive-start / exclusive-end range of items whose vertical
+ * span intersects [windowTop, windowBottom).
+ */
+export function getVisibleItemRange(
+  items: ReadonlyArray<Pick<ColumnItemMetric, 'top' | 'bottom'>>,
+  windowTop: number,
+  windowBottom: number,
+): VisibleItemRange {
+  if (items.length === 0 || windowBottom <= windowTop) {
+    return { start: 0, end: 0 };
+  }
+
+  let start = 0;
+
+  while (start < items.length && items[start]!.bottom <= windowTop) {
+    start += 1;
+  }
+
+  let end = start;
+
+  while (end < items.length && items[end]!.top < windowBottom) {
+    end += 1;
+  }
+
+  return { start, end };
+}
+
+export function estimateColumnWidth(viewportWidth: number, columnCount: number, gapPx: number = COLUMN_GAP_PX) {
+  const safeColumnCount = Math.max(1, columnCount);
+  // Approximate the exhibition content width (max-w-[2400px] with horizontal padding).
+  const horizontalPadding = viewportWidth >= 1024 ? 96 : viewportWidth >= 768 ? 48 : 32;
+  const contentWidth = Math.min(Math.max(viewportWidth, 0), 2400) - horizontalPadding;
+  const totalGap = gapPx * Math.max(0, safeColumnCount - 1);
+
+  return Math.max(MIN_COLUMN_WIDTH_PX, (contentWidth - totalGap) / safeColumnCount);
 }
 
 export function getPreloadWindowSize(columnCount: number) {
@@ -196,7 +287,7 @@ export function getPreloadPhotoIds(columns: Photo[][], seenPhotoIds: Set<string>
 }
 
 function getInitialAutoColumnCount() {
-  return typeof window === 'undefined' ? getAutoColumnCount(1280) : getAutoColumnCount(window.innerWidth);
+  return typeof window === 'undefined' ? getAutoColumnCount(DEFAULT_VIEWPORT_WIDTH) : getAutoColumnCount(window.innerWidth);
 }
 
 function arePhotoIdSetsEqual(left: Set<string>, right: Set<string>) {
@@ -212,6 +303,195 @@ function arePhotoIdSetsEqual(left: Set<string>, right: Set<string>) {
 
   return true;
 }
+
+type VirtualizedWaterfallColumnProps = {
+  photos: Photo[];
+  columnIndex: number;
+  columnCount: number;
+  preloadPhotoIds: Set<string>;
+  priorityPhotoIds: Set<string>;
+  onOpen: (photoId: string) => void;
+  onEnterViewport: (photoId: string) => void;
+  imageRootMargin: string;
+  imageReleaseRootMargin: string;
+  releaseImageOnExit: boolean;
+};
+
+type ScrollWindow = {
+  top: number;
+  bottom: number;
+};
+
+function readColumnScrollWindow(columnElement: HTMLElement, overscanPx: number): ScrollWindow {
+  const rect = columnElement.getBoundingClientRect();
+  const viewportHeight = typeof window === 'undefined' ? 0 : window.innerHeight;
+
+  return {
+    top: -rect.top - overscanPx,
+    bottom: -rect.top + viewportHeight + overscanPx,
+  };
+}
+
+const VirtualizedWaterfallColumn = memo(function VirtualizedWaterfallColumn({
+  photos,
+  columnIndex,
+  columnCount,
+  preloadPhotoIds,
+  priorityPhotoIds,
+  onOpen,
+  onEnterViewport,
+  imageRootMargin,
+  imageReleaseRootMargin,
+  releaseImageOnExit,
+}: VirtualizedWaterfallColumnProps) {
+  const columnRef = useRef<HTMLDivElement | null>(null);
+  const [columnWidth, setColumnWidth] = useState(() =>
+    typeof window === 'undefined'
+      ? estimateColumnWidth(DEFAULT_VIEWPORT_WIDTH, columnCount)
+      : estimateColumnWidth(window.innerWidth, columnCount),
+  );
+  const [scrollWindow, setScrollWindow] = useState<ScrollWindow>(() => ({
+    top: -COLUMN_OVERSCAN_PX,
+    bottom: (typeof window === 'undefined' ? DEFAULT_VIEWPORT_WIDTH : window.innerHeight) + COLUMN_OVERSCAN_PX,
+  }));
+  const scheduledFrameRef = useRef<number | null>(null);
+
+  const layout = useMemo(
+    () => getColumnLayoutMetrics(photos, columnWidth, COLUMN_GAP_PX),
+    [columnWidth, photos],
+  );
+
+  const visibleRange = useMemo(
+    () => getVisibleItemRange(layout.items, scrollWindow.top, scrollWindow.bottom),
+    [layout.items, scrollWindow.bottom, scrollWindow.top],
+  );
+
+  const syncScrollWindow = useCallback(() => {
+    const columnElement = columnRef.current;
+
+    if (columnElement === null) {
+      return;
+    }
+
+    const nextWindow = readColumnScrollWindow(columnElement, COLUMN_OVERSCAN_PX);
+
+    setScrollWindow((currentWindow) => {
+      if (
+        Math.abs(currentWindow.top - nextWindow.top) < 1 &&
+        Math.abs(currentWindow.bottom - nextWindow.bottom) < 1
+      ) {
+        return currentWindow;
+      }
+
+      return nextWindow;
+    });
+  }, []);
+
+  const scheduleScrollWindowSync = useCallback(() => {
+    if (scheduledFrameRef.current !== null) {
+      return;
+    }
+
+    scheduledFrameRef.current = window.requestAnimationFrame(() => {
+      scheduledFrameRef.current = null;
+      syncScrollWindow();
+    });
+  }, [syncScrollWindow]);
+
+  useEffect(() => {
+    const columnElement = columnRef.current;
+
+    if (columnElement === null) {
+      return;
+    }
+
+    const updateWidth = () => {
+      const nextWidth = columnElement.getBoundingClientRect().width;
+
+      if (nextWidth <= 0) {
+        return;
+      }
+
+      setColumnWidth((currentWidth) => (Math.abs(currentWidth - nextWidth) < 0.5 ? currentWidth : nextWidth));
+    };
+
+    updateWidth();
+    syncScrollWindow();
+
+    const resizeObserver =
+      typeof ResizeObserver === 'undefined'
+        ? null
+        : new ResizeObserver(() => {
+            updateWidth();
+            scheduleScrollWindowSync();
+          });
+
+    resizeObserver?.observe(columnElement);
+    window.addEventListener('scroll', scheduleScrollWindowSync, { passive: true });
+    window.addEventListener('resize', scheduleScrollWindowSync);
+
+    return () => {
+      resizeObserver?.disconnect();
+      window.removeEventListener('scroll', scheduleScrollWindowSync);
+      window.removeEventListener('resize', scheduleScrollWindowSync);
+
+      if (scheduledFrameRef.current !== null) {
+        window.cancelAnimationFrame(scheduledFrameRef.current);
+        scheduledFrameRef.current = null;
+      }
+    };
+  }, [columnCount, photos.length, scheduleScrollWindowSync, syncScrollWindow]);
+
+  // Re-measure when the estimated layout height changes enough to shift the column in the page.
+  useEffect(() => {
+    scheduleScrollWindowSync();
+  }, [layout.totalHeight, scheduleScrollWindowSync]);
+
+  const visiblePhotos = photos.slice(visibleRange.start, visibleRange.end);
+  const visibleMetrics = layout.items.slice(visibleRange.start, visibleRange.end);
+
+  return (
+    <div
+      ref={columnRef}
+      className="relative w-full"
+      style={{ height: layout.totalHeight > 0 ? layout.totalHeight : undefined }}
+      data-testid={`waterfall-column-${columnIndex}`}
+      data-total-count={photos.length}
+      data-visible-start={visibleRange.start}
+      data-visible-end={visibleRange.end}
+      data-mounted-count={visiblePhotos.length}
+    >
+      {visiblePhotos.map((photo, visibleIndex) => {
+        const metric = visibleMetrics[visibleIndex];
+
+        if (metric === undefined) {
+          return null;
+        }
+
+        return (
+          <div
+            key={photo.id}
+            className="absolute left-0 right-0"
+            style={{ top: metric.top }}
+            data-testid="waterfall-virtual-item"
+            data-photo-id={photo.id}
+          >
+            <WaterfallCard
+              photo={photo}
+              onOpen={onOpen}
+              shouldPreload={preloadPhotoIds.has(photo.id)}
+              isPriority={priorityPhotoIds.has(photo.id)}
+              onEnterViewport={onEnterViewport}
+              rootMargin={imageRootMargin}
+              releaseRootMargin={imageReleaseRootMargin}
+              releaseImageOnExit={releaseImageOnExit}
+            />
+          </div>
+        );
+      })}
+    </div>
+  );
+});
 
 export const WaterfallGallery = memo(function WaterfallGallery({ photos, columnPreference, onOpen }: WaterfallGalleryProps) {
   const [autoColumnCount, setAutoColumnCount] = useState(getInitialAutoColumnCount);
@@ -253,6 +533,9 @@ export const WaterfallGallery = memo(function WaterfallGallery({ photos, columnP
     () => new Set(getPriorityPhotoIds(columns, getPriorityPhotoCount(resolvedColumnCount))),
     [columns, resolvedColumnCount],
   );
+  const imageRootMargin = getImageRootMargin(resolvedColumnCount);
+  const imageReleaseRootMargin = getImageReleaseRootMargin(resolvedColumnCount);
+  const releaseImageOnExit = shouldReleaseOffscreenImages(resolvedColumnCount);
 
   const syncPreloadPhotoIds = useCallback(() => {
     const nextSeenPhotoIds = new Set<string>();
@@ -310,21 +593,19 @@ export const WaterfallGallery = memo(function WaterfallGallery({ photos, columnP
       data-testid="waterfall-gallery"
     >
       {columns.map((columnPhotos, columnIndex) => (
-        <div key={`column-${columnIndex}`} className="flex flex-col gap-2" data-testid={`waterfall-column-${columnIndex}`}>
-          {columnPhotos.map((photo) => (
-            <WaterfallCard
-              key={photo.id}
-              photo={photo}
-              onOpen={onOpen}
-              shouldPreload={preloadPhotoIds.has(photo.id)}
-              isPriority={priorityPhotoIds.has(photo.id)}
-              onEnterViewport={handlePhotoEnterViewport}
-              rootMargin={getImageRootMargin(resolvedColumnCount)}
-              releaseRootMargin={getImageReleaseRootMargin(resolvedColumnCount)}
-              releaseImageOnExit={shouldReleaseOffscreenImages(resolvedColumnCount)}
-            />
-          ))}
-        </div>
+        <VirtualizedWaterfallColumn
+          key={`column-${columnIndex}`}
+          photos={columnPhotos}
+          columnIndex={columnIndex}
+          columnCount={resolvedColumnCount}
+          preloadPhotoIds={preloadPhotoIds}
+          priorityPhotoIds={priorityPhotoIds}
+          onOpen={onOpen}
+          onEnterViewport={handlePhotoEnterViewport}
+          imageRootMargin={imageRootMargin}
+          imageReleaseRootMargin={imageReleaseRootMargin}
+          releaseImageOnExit={releaseImageOnExit}
+        />
       ))}
     </div>
   );
