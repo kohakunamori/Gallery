@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react';
 import type {
   GalleryColumnPreference,
@@ -12,7 +12,18 @@ import {
   getVisibleGalleryMediaSourcePreferences,
   isGalleryMediaSourceVisible,
 } from '../../utils/gallerySettings';
+import { getVisibleInitialFocusElement, trapTabKey } from '../../utils/dialogFocus';
 import type { MediaSourceStatus } from '../../services/mediaSources';
+
+function getIsDesktopViewport() {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+    // Prefer desktop close when matchMedia is unavailable (jsdom / legacy).
+    return true;
+  }
+
+  const mediaQueryList = window.matchMedia('(min-width: 768px)');
+  return mediaQueryList?.matches ?? true;
+}
 
 type GallerySettingsModalProps = {
   columnPreference: GalleryColumnPreference;
@@ -24,15 +35,6 @@ type GallerySettingsModalProps = {
   onSelectMediaSourcePreference: (value: GalleryMediaSourcePreference) => void;
   onClose: () => void;
 };
-
-const FOCUSABLE_SELECTOR = [
-  'button:not([disabled])',
-  '[href]',
-  'input:not([disabled])',
-  'select:not([disabled])',
-  'textarea:not([disabled])',
-  '[tabindex]:not([tabindex="-1"])',
-].join(', ');
 
 const sortOptions: Array<{ value: GallerySortPreference; label: string }> = [
   { value: 'newest', label: 'Newest first' },
@@ -116,8 +118,10 @@ export function GallerySettingsModal({
   onClose,
 }: GallerySettingsModalProps) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
-  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+  const desktopCloseButtonRef = useRef<HTMLButtonElement | null>(null);
+  const mobileCloseButtonRef = useRef<HTMLButtonElement | null>(null);
   const previouslyFocusedElementRef = useRef<HTMLElement | null>(null);
+  const [isDesktopViewport, setIsDesktopViewport] = useState(getIsDesktopViewport);
   const visibleMediaSourceOptions = getVisibleGalleryMediaSourcePreferences().map((value) => ({
     value,
     label: mediaSourceLabels[value],
@@ -141,11 +145,45 @@ export function GallerySettingsModal({
   };
 
   useEffect(() => {
-    previouslyFocusedElementRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    closeButtonRef.current?.focus();
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+      return;
+    }
+
+    const mediaQuery = window.matchMedia('(min-width: 768px)');
+    if (!mediaQuery || typeof mediaQuery.matches !== 'boolean') {
+      return;
+    }
+
+    const syncViewport = () => {
+      setIsDesktopViewport(mediaQuery.matches);
+    };
+
+    syncViewport();
+    mediaQuery.addEventListener?.('change', syncViewport);
 
     return () => {
-      previouslyFocusedElementRef.current?.focus();
+      mediaQuery.removeEventListener?.('change', syncViewport);
+    };
+  }, []);
+
+  useEffect(() => {
+    previouslyFocusedElementRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+
+    const preferredCloseButton = isDesktopViewport
+      ? desktopCloseButtonRef.current
+      : mobileCloseButtonRef.current;
+    const fallbackCloseButton = isDesktopViewport
+      ? mobileCloseButtonRef.current
+      : desktopCloseButtonRef.current;
+    const initialFocusElement = getVisibleInitialFocusElement([preferredCloseButton, fallbackCloseButton]);
+
+    initialFocusElement?.focus();
+
+    return () => {
+      const previous = previouslyFocusedElementRef.current;
+      if (previous?.isConnected) {
+        previous.focus();
+      }
     };
   }, []);
 
@@ -156,29 +194,9 @@ export function GallerySettingsModal({
   };
 
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
-    if (event.key === 'Tab') {
-      const focusableElements = dialogRef.current
-        ? Array.from(dialogRef.current.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
-            (element) => !element.hasAttribute('disabled') && element.tabIndex !== -1,
-          )
-        : [];
-
-      if (focusableElements.length > 0) {
-        const firstFocusableElement = focusableElements[0];
-        const lastFocusableElement = focusableElements[focusableElements.length - 1];
-
-        if (event.shiftKey && document.activeElement === firstFocusableElement) {
-          event.preventDefault();
-          lastFocusableElement.focus();
-          return;
-        }
-
-        if (!event.shiftKey && document.activeElement === lastFocusableElement) {
-          event.preventDefault();
-          firstFocusableElement.focus();
-          return;
-        }
-      }
+    if (event.key === 'Tab' && dialogRef.current) {
+      trapTabKey(event, dialogRef.current);
+      return;
     }
 
     if (event.key === 'Escape') {
@@ -190,7 +208,7 @@ export function GallerySettingsModal({
   return (
     <div
       ref={dialogRef}
-      className="fixed inset-0 z-50 flex animate-[fade-in_220ms_ease-out] items-end justify-center overflow-y-auto overscroll-contain bg-black/28 px-0 pt-[max(0.75rem,env(safe-area-inset-top))] text-on-surface backdrop-blur-xl sm:pt-[max(1rem,env(safe-area-inset-top))] md:items-center md:bg-black/35 md:px-8 md:py-6 md:backdrop-blur-md"
+      className="dialog-backdrop-enter fixed inset-0 z-50 flex items-end justify-center overflow-y-auto overscroll-contain bg-black/28 px-0 pt-[max(0.75rem,env(safe-area-inset-top))] text-on-surface backdrop-blur-xl sm:pt-[max(1rem,env(safe-area-inset-top))] md:items-center md:bg-black/35 md:px-8 md:py-6 md:backdrop-blur-md"
       role="dialog"
       aria-modal="true"
       aria-label="Gallery settings"
@@ -198,10 +216,12 @@ export function GallerySettingsModal({
       onClick={handleBackdropClick}
       onKeyDown={handleKeyDown}
       data-testid="gallery-settings-backdrop"
+      data-motion="dialog-backdrop"
     >
       <div
-        className="flex max-h-[calc(100vh-max(0.75rem,env(safe-area-inset-top))-0.5rem)] max-h-[calc(100dvh-max(0.75rem,env(safe-area-inset-top))-0.5rem)] w-full animate-[sheet-up_260ms_cubic-bezier(0.22,1,0.36,1)] flex-col overflow-hidden rounded-t-[28px] border border-white/45 bg-[linear-gradient(180deg,rgba(255,255,255,0.88),rgba(248,250,255,0.78))] shadow-[0_24px_80px_rgba(15,23,42,0.18)] backdrop-blur-3xl sm:max-h-[calc(100vh-max(1rem,env(safe-area-inset-top))-0.75rem)] sm:max-h-[calc(100dvh-max(1rem,env(safe-area-inset-top))-0.75rem)] sm:rounded-t-[30px] md:max-h-[calc(100dvh-3rem)] md:max-w-md md:animate-none md:rounded-[28px] md:border-transparent md:bg-surface/95 md:backdrop-blur-2xl"
+        className="dialog-sheet-enter flex max-h-[calc(100vh-max(0.75rem,env(safe-area-inset-top))-0.5rem)] max-h-[calc(100dvh-max(0.75rem,env(safe-area-inset-top))-0.5rem)] w-full flex-col overflow-hidden rounded-t-[28px] border border-white/45 bg-[linear-gradient(180deg,rgba(255,255,255,0.88),rgba(248,250,255,0.78))] shadow-[0_24px_80px_rgba(15,23,42,0.18)] backdrop-blur-3xl sm:max-h-[calc(100vh-max(1rem,env(safe-area-inset-top))-0.75rem)] sm:max-h-[calc(100dvh-max(1rem,env(safe-area-inset-top))-0.75rem)] sm:rounded-t-[30px] md:max-h-[calc(100dvh-3rem)] md:max-w-md md:rounded-[28px] md:border-transparent md:bg-surface/95 md:backdrop-blur-2xl"
         onClick={(event) => event.stopPropagation()}
+        data-motion="dialog-sheet"
       >
         <div className="flex justify-center px-4 pb-1.5 pt-2.5 sm:pb-2 sm:pt-3 md:hidden">
           <div className="h-1.5 w-11 rounded-full bg-black/12 shadow-[inset_0_1px_1px_rgba(255,255,255,0.55)]" aria-hidden="true" />
@@ -216,10 +236,12 @@ export function GallerySettingsModal({
             </p>
           </div>
           <button
-            ref={closeButtonRef}
+            ref={desktopCloseButtonRef}
             type="button"
             aria-label="Close gallery settings"
             onClick={onClose}
+            data-settings-close="desktop"
+            tabIndex={isDesktopViewport ? undefined : -1}
             className="hidden min-h-11 shrink-0 items-center rounded-full bg-surface-container px-4 text-sm font-medium text-on-surface transition-colors duration-200 hover:bg-surface-container-high focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 md:inline-flex"
           >
             Close
@@ -359,8 +381,11 @@ export function GallerySettingsModal({
 
         <div className="border-t border-white/55 bg-[linear-gradient(180deg,rgba(255,255,255,0.62),rgba(247,249,255,0.88))] px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2.5 shadow-[0_-16px_36px_rgba(15,23,42,0.08)] backdrop-blur-2xl sm:px-4 sm:pb-[max(1rem,env(safe-area-inset-bottom))] sm:pt-3 md:hidden">
           <button
+            ref={mobileCloseButtonRef}
             type="button"
             onClick={onClose}
+            data-settings-close="mobile"
+            tabIndex={isDesktopViewport ? -1 : undefined}
             className="inline-flex min-h-14 w-full items-center justify-center rounded-[18px] bg-white/78 px-4 text-base font-semibold text-on-surface shadow-[0_10px_22px_rgba(15,23,42,0.08)] transition-colors duration-200 hover:bg-white/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
           >
             Close settings

@@ -7,13 +7,17 @@ type ExhibitionHeaderProps = {
 };
 
 export const ExhibitionHeader = memo(function ExhibitionHeader({ isAtTop, isVisible, onOpenSettings }: ExhibitionHeaderProps) {
+  const shellInertProps = !isVisible ? ({ inert: true } as Record<string, unknown>) : {};
+
   return (
     <header className="fixed inset-x-0 top-0 z-40 px-4 py-5 md:px-8" role="banner">
       <div
-        className={`mx-auto max-w-[2400px] transition-all duration-300 ${
+        className={`gallery-header-shell mx-auto max-w-[2400px] transition-all duration-300 ${
           isVisible ? 'translate-y-0 opacity-100' : '-translate-y-4 opacity-0 pointer-events-none'
         }`}
         data-testid="gallery-header-shell"
+        aria-hidden={isVisible ? undefined : true}
+        {...shellInertProps}
       >
         <div className="relative min-h-12">
           <div
@@ -35,6 +39,7 @@ export const ExhibitionHeader = memo(function ExhibitionHeader({ isAtTop, isVisi
             <a
               href="/upload"
               aria-label="Open gallery upload"
+              tabIndex={isVisible ? undefined : -1}
               className={`inline-flex min-h-12 items-center gap-2 rounded-full px-4 text-sm font-medium text-on-surface transition-all duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
                 isAtTop
                   ? 'bg-surface/78 shadow-[0_12px_36px_rgba(15,23,42,0.08)] backdrop-blur-xl'
@@ -52,6 +57,7 @@ export const ExhibitionHeader = memo(function ExhibitionHeader({ isAtTop, isVisi
               type="button"
               aria-label="Open gallery settings"
               onClick={onOpenSettings}
+              tabIndex={isVisible ? undefined : -1}
               className={`inline-flex min-h-12 items-center gap-2 rounded-full px-4 text-sm font-medium text-on-surface transition-all duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
                 isAtTop
                   ? 'bg-surface/78 shadow-[0_12px_36px_rgba(15,23,42,0.08)] backdrop-blur-xl'
