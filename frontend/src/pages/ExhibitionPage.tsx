@@ -13,14 +13,11 @@ import {
 } from '../components/exhibition/WaterfallGallery';
 import { GallerySettingsModal } from '../components/exhibition/GallerySettingsModal';
 import {
-  normalizeGalleryMediaSourcePreference,
   readGallerySettings,
   writeGallerySettings,
 } from '../utils/gallerySettings';
 import type {
   GalleryColumnPreference,
-  GalleryConcreteMediaSource,
-  GalleryMediaSourcePreference,
   GallerySortPreference,
 } from '../utils/gallerySettings';
 import {
@@ -33,15 +30,12 @@ import { LoadTrigger } from '../components/exhibition/LoadTrigger';
 import { PhotoViewerModal } from '../components/viewer/PhotoViewerModal';
 import { fetchPhotos, resetPhotoRequestCache } from '../services/photos';
 import { getScrollBehavior } from '../utils/motion';
-import { fetchMediaSourceStatuses } from '../services/mediaSources';
-import type { MediaSourceStatus } from '../services/mediaSources';
 import type { Photo } from '../types/photo';
 import { readSelectedPhotoId, writeSelectedPhotoId } from '../utils/photoQuery';
 import { groupPhotosByMonth } from '../utils/groupPhotosByMonth';
 import { sortPhotos } from '../utils/sortPhotos';
 import {
   EXHIBITION_STATUS_COPY,
-  isMediaSourceFailureMessage,
   toUserFacingError,
 } from '../utils/userFacingError';
 import { t } from '../i18n';
@@ -50,23 +44,7 @@ const DEFAULT_VIEWPORT_WIDTH = 1280;
 const TOP_VISIBILITY_THRESHOLD = 24;
 const DOWNWARD_HIDE_THRESHOLD = 64;
 const UPWARD_REVEAL_THRESHOLD = 96;
-const AUTO_MEDIA_SOURCE_CANDIDATES: GalleryConcreteMediaSource[] = ['r2', 'qiniu'];
-const IMAGE_PROBE_TIMEOUT_MS = 3000;
-const IMAGE_CACHE_PROBE_QUERY_PARAM = 'cacheProbe';
-
-function getMediaSourceStatus(
-  mediaSourceStatuses: MediaSourceStatus[],
-  mediaSource: GalleryConcreteMediaSource,
-): MediaSourceStatus | undefined {
-  return mediaSourceStatuses.find((status) => status.source === mediaSource);
-}
-
-function getAutoMediaSourceStatusSignature(mediaSourceStatuses: MediaSourceStatus[]): string {
-  return AUTO_MEDIA_SOURCE_CANDIDATES.map((mediaSource) => {
-    const status = getMediaSourceStatus(mediaSourceStatuses, mediaSource);
-    return `${mediaSource}:${status?.isAvailable ?? false}:${status?.isDisabled ?? false}:${status?.status ?? 'unknown'}`;
-  }).join('|');
-}
+const FIXED_MEDIA_SOURCE = 'r2' as const;
 
 function getViewportWidth() {
   return typeof window === 'undefined' ? DEFAULT_VIEWPORT_WIDTH : window.innerWidth;
@@ -84,82 +62,6 @@ function isAbortError(error: unknown): error is DOMException {
   return error instanceof DOMException && error.name === 'AbortError';
 }
 
-function isMediaSourceDisabled(mediaSourceStatuses: MediaSourceStatus[], mediaSource: GalleryConcreteMediaSource): boolean {
-  return getMediaSourceStatus(mediaSourceStatuses, mediaSource)?.isDisabled ?? false;
-}
-
-function probeImage(url: string, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(new DOMException('The operation was aborted.', 'AbortError'));
-      return;
-    }
-
-    const image = new Image();
-    const probeUrl = new URL(url, window.location.origin);
-    probeUrl.searchParams.set(IMAGE_CACHE_PROBE_QUERY_PARAM, '1');
-
-    const timeoutId = window.setTimeout(() => {
-      cleanup();
-      reject(new Error(`Image probe timed out for ${url}`));
-    }, IMAGE_PROBE_TIMEOUT_MS);
-
-    const handleAbort = () => {
-      cleanup();
-      reject(new DOMException('The operation was aborted.', 'AbortError'));
-    };
-
-    const cleanup = () => {
-      window.clearTimeout(timeoutId);
-      image.onload = null;
-      image.onerror = null;
-      signal?.removeEventListener('abort', handleAbort);
-    };
-
-    image.onload = () => {
-      cleanup();
-      resolve();
-    };
-
-    image.onerror = () => {
-      cleanup();
-      reject(new Error(`Image probe failed for ${url}`));
-    };
-
-    signal?.addEventListener('abort', handleAbort, { once: true });
-    image.src = probeUrl.toString();
-  });
-}
-
-async function resolveAutoMediaSourcePhotos(
-  mediaSourceStatuses: MediaSourceStatus[],
-  signal?: AbortSignal,
-): Promise<{ source: GalleryConcreteMediaSource; items: Photo[] }> {
-  for (const mediaSource of AUTO_MEDIA_SOURCE_CANDIDATES) {
-    if (isMediaSourceDisabled(mediaSourceStatuses, mediaSource)) {
-      continue;
-    }
-
-    try {
-      const items = await fetchPhotos(mediaSource, signal);
-
-      if (items.length === 0) {
-        return { source: mediaSource, items };
-      }
-
-      await probeImage(items[0].thumbnailUrl, signal);
-
-      return { source: mediaSource, items };
-    } catch (error: unknown) {
-      if (isAbortError(error)) {
-        throw error;
-      }
-    }
-  }
-
-  throw new Error('No reachable remote media source.');
-}
-
 export function ExhibitionPage() {
   const [persistedSettings] = useState(readGallerySettings);
   const [photos, setPhotos] = useState<Photo[]>([]);
@@ -172,17 +74,11 @@ export function ExhibitionPage() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [columnPreference, setColumnPreference] = useState<GalleryColumnPreference>(persistedSettings.columnPreference);
   const [sortPreference, setSortPreference] = useState<GallerySortPreference>(persistedSettings.sortPreference);
-  const [mediaSourcePreference, setMediaSourcePreference] = useState<GalleryMediaSourcePreference>(
-    normalizeGalleryMediaSourcePreference(persistedSettings.mediaSourcePreference),
-  );
   const [themePreference, setThemePreference] = useState<GalleryThemePreference>(readGalleryThemePreference);
-  const [mediaSourceStatuses, setMediaSourceStatuses] = useState<MediaSourceStatus[]>([]);
-  const [hasLoadedMediaSourceStatuses, setHasLoadedMediaSourceStatuses] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const previousScrollYRef = useRef(0);
   const upwardRevealDistanceRef = useRef(0);
   const downwardHideDistanceRef = useRef(0);
-  const autoMediaSourceStatusSignature = getAutoMediaSourceStatusSignature(mediaSourceStatuses);
 
   useEffect(() => {
     const handleScroll = () => {
@@ -231,55 +127,6 @@ export function ExhibitionPage() {
   useEffect(() => {
     const controller = new AbortController();
 
-    fetchMediaSourceStatuses(controller.signal)
-      .then((items) => {
-        setMediaSourceStatuses(items);
-        setHasLoadedMediaSourceStatuses(true);
-      })
-      .catch((error: unknown) => {
-        if (isAbortError(error)) {
-          return;
-        }
-
-        setHasLoadedMediaSourceStatuses(true);
-      });
-
-    return () => {
-      controller.abort();
-    };
-  }, []);
-
-  useEffect(() => {
-    const normalizedMediaSourcePreference = normalizeGalleryMediaSourcePreference(mediaSourcePreference);
-
-    if (normalizedMediaSourcePreference !== mediaSourcePreference) {
-      setMediaSourcePreference(normalizedMediaSourcePreference);
-      return;
-    }
-
-    if (!hasLoadedMediaSourceStatuses || mediaSourcePreference === 'auto') {
-      return;
-    }
-
-    const selectedSourceStatus = getMediaSourceStatus(mediaSourceStatuses, mediaSourcePreference);
-    const fallbackMediaSourcePreference = normalizeGalleryMediaSourcePreference('auto');
-
-    if (selectedSourceStatus?.isDisabled && mediaSourcePreference !== fallbackMediaSourcePreference) {
-      setMediaSourcePreference(fallbackMediaSourcePreference);
-    }
-  }, [hasLoadedMediaSourceStatuses, mediaSourcePreference, mediaSourceStatuses]);
-
-  useEffect(() => {
-    if ((mediaSourcePreference === 'auto' || mediaSourcePreference === 'qiniu') && !hasLoadedMediaSourceStatuses) {
-      return;
-    }
-
-    if (mediaSourcePreference !== 'auto' && isMediaSourceDisabled(mediaSourceStatuses, mediaSourcePreference)) {
-      return;
-    }
-
-    const controller = new AbortController();
-
     // Full load cycle: drop session cache so post-upload nav cannot pin a stale /api/photos snapshot.
     resetPhotoRequestCache();
     setStatus('loading');
@@ -288,35 +135,23 @@ export function ExhibitionPage() {
 
     const loadPhotos = async () => {
       try {
-        const nextItems =
-          mediaSourcePreference === 'auto'
-            ? await resolveAutoMediaSourcePhotos(mediaSourceStatuses, controller.signal)
-            : {
-                source: mediaSourcePreference,
-                items: await fetchPhotos(mediaSourcePreference, controller.signal),
-              };
+        const items = await fetchPhotos(FIXED_MEDIA_SOURCE, controller.signal);
 
         if (controller.signal.aborted) {
           return;
         }
 
-        setPhotos(nextItems.items);
-        setStatus(nextItems.items.length === 0 ? 'empty' : 'ready');
+        setPhotos(items);
+        setStatus(items.length === 0 ? 'empty' : 'ready');
       } catch (error: unknown) {
         if (isAbortError(error)) {
           return;
         }
 
-        const description = toUserFacingError(error, 'exhibition');
-        const message = error instanceof Error ? error.message : '';
-        setErrorCopy(
-          isMediaSourceFailureMessage(message)
-            ? EXHIBITION_STATUS_COPY.mediaSourceUnavailable
-            : {
-                title: EXHIBITION_STATUS_COPY.error.title,
-                description,
-              },
-        );
+        setErrorCopy({
+          title: EXHIBITION_STATUS_COPY.error.title,
+          description: toUserFacingError(error, 'exhibition'),
+        });
         setStatus('error');
       }
     };
@@ -326,12 +161,7 @@ export function ExhibitionPage() {
     return () => {
       controller.abort();
     };
-  }, [
-    mediaSourcePreference,
-    (mediaSourcePreference === 'auto' || mediaSourcePreference === 'qiniu') ? hasLoadedMediaSourceStatuses : false,
-    mediaSourcePreference === 'auto' ? autoMediaSourceStatusSignature : '',
-    reloadKey,
-  ]);
+  }, [reloadKey]);
 
   useEffect(() => {
     if (isSettingsOpen) {
@@ -343,9 +173,10 @@ export function ExhibitionPage() {
     writeGallerySettings({
       columnPreference,
       sortPreference,
-      mediaSourcePreference,
+      // Production gallery only serves R2; keep storage shape but pin the value.
+      mediaSourcePreference: FIXED_MEDIA_SOURCE,
     });
-  }, [columnPreference, sortPreference, mediaSourcePreference]);
+  }, [columnPreference, sortPreference]);
 
   useEffect(() => {
     writeGalleryThemePreference(themePreference);
@@ -558,12 +389,9 @@ export function ExhibitionPage() {
         <GallerySettingsModal
           columnPreference={columnPreference}
           sortPreference={sortPreference}
-          mediaSourcePreference={mediaSourcePreference}
           themePreference={themePreference}
-          mediaSourceStatuses={mediaSourceStatuses}
           onSelectColumnPreference={setColumnPreference}
           onSelectSortPreference={setSortPreference}
-          onSelectMediaSourcePreference={setMediaSourcePreference}
           onSelectThemePreference={setThemePreference}
           onClose={closeSettings}
         />

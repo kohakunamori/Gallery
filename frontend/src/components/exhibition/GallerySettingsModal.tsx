@@ -2,19 +2,15 @@ import { useEffect, useRef, useState } from 'react';
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react';
 import type {
   GalleryColumnPreference,
-  GalleryMediaSourcePreference,
   GallerySortPreference,
 } from '../../utils/gallerySettings';
 import {
   MAX_GALLERY_COLUMN_COUNT,
   MIN_GALLERY_COLUMN_COUNT,
   getFixedGalleryColumnCount,
-  getVisibleGalleryMediaSourcePreferences,
-  isGalleryMediaSourceVisible,
 } from '../../utils/gallerySettings';
 import type { GalleryThemePreference } from '../../utils/galleryTheme';
 import { getVisibleInitialFocusElement, trapTabKey } from '../../utils/dialogFocus';
-import type { MediaSourceStatus } from '../../services/mediaSources';
 import { t } from '../../i18n';
 
 function getIsDesktopViewport() {
@@ -30,12 +26,9 @@ function getIsDesktopViewport() {
 type GallerySettingsModalProps = {
   columnPreference: GalleryColumnPreference;
   sortPreference: GallerySortPreference;
-  mediaSourcePreference: GalleryMediaSourcePreference;
   themePreference: GalleryThemePreference;
-  mediaSourceStatuses: MediaSourceStatus[];
   onSelectColumnPreference: (value: GalleryColumnPreference) => void;
   onSelectSortPreference: (value: GallerySortPreference) => void;
-  onSelectMediaSourcePreference: (value: GalleryMediaSourcePreference) => void;
   onSelectThemePreference: (value: GalleryThemePreference) => void;
   onClose: () => void;
 };
@@ -52,13 +45,6 @@ const themeOptions: Array<{ value: GalleryThemePreference; label: string }> = [
   { value: 'light', label: t('settings.theme.light') },
   { value: 'dark', label: t('settings.theme.dark') },
 ];
-const mediaSourceLabels: Record<GalleryMediaSourcePreference, string> = {
-  auto: t('settings.media.auto'),
-  r2: t('settings.media.r2'),
-  qiniu: t('settings.media.qiniu'),
-  local: t('settings.media.local'),
-};
-const DEFAULT_QINIU_QUOTA_BYTES = 10 * 1024 * 1024 * 1024;
 
 function SelectedIcon() {
   return (
@@ -100,31 +86,12 @@ function getSectionCardClasses() {
   return 'settings-section-card space-y-3 rounded-[22px] border p-3 backdrop-blur-xl md:rounded-none md:border-none md:bg-transparent md:p-0 md:shadow-none md:backdrop-blur-none';
 }
 
-function formatGigabytes(bytes: number) {
-  return (bytes / 1024 ** 3).toFixed(2);
-}
-
-function getQiniuUsageBarClasses(usagePercent: number) {
-  if (usagePercent >= 100) {
-    return 'bg-red-500';
-  }
-
-  if (usagePercent >= 80) {
-    return 'bg-amber-500';
-  }
-
-  return 'bg-primary';
-}
-
 export function GallerySettingsModal({
   columnPreference,
   sortPreference,
-  mediaSourcePreference,
   themePreference,
-  mediaSourceStatuses,
   onSelectColumnPreference,
   onSelectSortPreference,
-  onSelectMediaSourcePreference,
   onSelectThemePreference,
   onClose,
 }: GallerySettingsModalProps) {
@@ -133,18 +100,6 @@ export function GallerySettingsModal({
   const mobileCloseButtonRef = useRef<HTMLButtonElement | null>(null);
   const previouslyFocusedElementRef = useRef<HTMLElement | null>(null);
   const [isDesktopViewport, setIsDesktopViewport] = useState(getIsDesktopViewport);
-  const visibleMediaSourceOptions = getVisibleGalleryMediaSourcePreferences().map((value) => ({
-    value,
-    label: mediaSourceLabels[value],
-  }));
-  const isQiniuVisible = isGalleryMediaSourceVisible('qiniu');
-  const qiniuStatus = isQiniuVisible ? mediaSourceStatuses.find((status) => status.source === 'qiniu') : undefined;
-  const qiniuUsage = qiniuStatus?.usage;
-  const qiniuQuotaBytes = qiniuUsage?.quotaBytes ?? DEFAULT_QINIU_QUOTA_BYTES;
-  const qiniuUsedBytes = qiniuUsage?.usedBytes ?? 0;
-  const qiniuUsagePercent = qiniuQuotaBytes === 0 ? 0 : Math.min(100, (qiniuUsedBytes / qiniuQuotaBytes) * 100);
-  const qiniuUsagePercentRounded = Math.round(qiniuUsagePercent);
-  const qiniuUsageBarClasses = getQiniuUsageBarClasses(qiniuUsagePercent);
   const currentFixedColumnCount = getFixedGalleryColumnCount(columnPreference);
 
   const decreaseColumnCount = () => {
@@ -304,58 +259,6 @@ export function GallerySettingsModal({
           </div>
 
           <div className={getSectionCardClasses()}>
-            <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-on-surface-variant">{t('settings.mediaSource')}</p>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              {visibleMediaSourceOptions.map((option) => {
-                const isSelected = option.value === mediaSourcePreference;
-                const status = option.value === 'auto' ? undefined : mediaSourceStatuses.find((item) => item.source === option.value);
-                const isDisabled = status?.isDisabled ?? false;
-
-                return (
-                  <button
-                    key={option.value}
-                    type="button"
-                    aria-pressed={isSelected}
-                    disabled={isDisabled}
-                    onClick={() => onSelectMediaSourcePreference(option.value)}
-                    className={getOptionButtonClasses(isSelected, isDisabled)}
-                  >
-                    {renderOptionContent(option.label, isSelected)}
-                  </button>
-                );
-              })}
-            </div>
-            {qiniuStatus !== undefined && (
-              <div className="settings-soft-panel rounded-2xl border px-4 py-3 text-sm text-on-surface-variant">
-                <p className="text-xs text-on-surface-variant">{t('settings.qiniu.autoHint')}</p>
-                <div className="mt-3 flex items-center justify-between gap-4 text-on-surface">
-                  <span className="font-medium">{t('settings.qiniu.traffic')}</span>
-                  <span>
-                    {formatGigabytes(qiniuUsedBytes)} / {formatGigabytes(qiniuQuotaBytes)} GB
-                  </span>
-                </div>
-                <div
-                  className="settings-usage-track mt-3 h-2 overflow-hidden rounded-full"
-                  role="progressbar"
-                  aria-label={t('settings.qiniu.trafficUsage')}
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-valuenow={qiniuUsagePercentRounded}
-                  aria-valuetext={`${formatGigabytes(qiniuUsedBytes)} of ${formatGigabytes(qiniuQuotaBytes)} GB used`}
-                >
-                  <div
-                    className={`h-full rounded-full ${qiniuUsageBarClasses}`}
-                    style={{ width: `${qiniuUsagePercent}%` }}
-                  />
-                </div>
-                <p className="mt-2 text-xs text-on-surface-variant">
-                  {qiniuStatus.message ?? (qiniuStatus.isDisabled ? t('settings.qiniu.unavailable') : t('settings.qiniu.available'))}
-                </p>
-              </div>
-            )}
-          </div>
-
-          <div className={getSectionCardClasses()}>
             <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-on-surface-variant">{t('settings.waterfallColumns')}</p>
             <div className="space-y-3">
               <button
@@ -411,10 +314,6 @@ export function GallerySettingsModal({
             </div>
           </div>
         </div>
-
-        <p className="px-1 text-xs text-on-surface-variant" data-testid="gallery-build-id">
-          Build {__GALLERY_BUILD_ID__}
-        </p>
 
         <div className="settings-footer border-t px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2.5 backdrop-blur-2xl sm:px-4 sm:pb-[max(1rem,env(safe-area-inset-bottom))] sm:pt-3 md:hidden">
           <button

@@ -15,24 +15,17 @@ import type { Album } from '../types/album';
 import type { Photo } from '../types/photo';
 import { filterPhotosByAlbum } from '../utils/albumRoute';
 import {
-  normalizeGalleryMediaSourcePreference,
   readGallerySettings,
   type GalleryColumnPreference,
-  type GalleryConcreteMediaSource,
 } from '../utils/gallerySettings';
 import { sortPhotos } from '../utils/sortPhotos';
 
 const DEFAULT_VIEWPORT_WIDTH = 1280;
+const FIXED_MEDIA_SOURCE = 'r2' as const;
 
 type AlbumDetailPageProps = {
   albumId: string;
 };
-
-function resolveConcreteMediaSource(): GalleryConcreteMediaSource {
-  const preference = normalizeGalleryMediaSourcePreference(readGallerySettings().mediaSourcePreference);
-
-  return preference === 'auto' ? 'r2' : preference;
-}
 
 function getViewportWidth() {
   return typeof window === 'undefined' ? DEFAULT_VIEWPORT_WIDTH : window.innerWidth;
@@ -58,8 +51,6 @@ export function AlbumDetailPage({ albumId }: AlbumDetailPageProps) {
 
   useEffect(() => {
     const controller = new AbortController();
-    const mediaSource = resolveConcreteMediaSource();
-
     setStatus('loading');
     setVisibleCount(getInitialVisibleCount(getResolvedColumnCount(columnPreference)));
     setSelectedPhotoId(null);
@@ -67,8 +58,8 @@ export function AlbumDetailPage({ albumId }: AlbumDetailPageProps) {
     const load = async () => {
       try {
         const [albumItems, photoItems] = await Promise.all([
-          fetchAlbums(mediaSource).catch(() => [] as Album[]),
-          fetchPhotos(mediaSource, controller.signal),
+          fetchAlbums(FIXED_MEDIA_SOURCE).catch(() => [] as Album[]),
+          fetchPhotos(FIXED_MEDIA_SOURCE, controller.signal),
         ]);
 
         if (controller.signal.aborted) {

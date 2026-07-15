@@ -3,9 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ExhibitionPage } from './ExhibitionPage';
 import { fetchPhotos, resetPhotoRequestCache } from '../services/photos';
-import { fetchMediaSourceStatuses } from '../services/mediaSources';
-import type { MediaSourceStatus } from '../services/mediaSources';
-import { GALLERY_MEDIA_SOURCE_VISIBILITY, GALLERY_SETTINGS_STORAGE_KEY } from '../utils/gallerySettings';
+import { GALLERY_SETTINGS_STORAGE_KEY } from '../utils/gallerySettings';
 import { GALLERY_THEME_STORAGE_KEY } from '../utils/galleryTheme';
 
 vi.mock('../services/photos', () => ({
@@ -13,12 +11,7 @@ vi.mock('../services/photos', () => ({
   resetPhotoRequestCache: vi.fn(),
 }));
 
-vi.mock('../services/mediaSources', () => ({
-  fetchMediaSourceStatuses: vi.fn(),
-}));
-
 const mockedFetchPhotos = vi.mocked(fetchPhotos);
-const mockedFetchMediaSourceStatuses = vi.mocked(fetchMediaSourceStatuses);
 const mockedResetPhotoRequestCache = vi.mocked(resetPhotoRequestCache);
 
 function resetLocation(path = '/') {
@@ -64,32 +57,6 @@ function getObserverForElement(element: Element) {
   return MockIntersectionObserver.instances.find((instance) => instance.observedElements.has(element));
 }
 
-class MockImage {
-  static requestedUrls: string[] = [];
-  static failingUrls = new Set<string>();
-
-  onload: (() => void) | null = null;
-  onerror: (() => void) | null = null;
-
-  set src(value: string) {
-    MockImage.requestedUrls.push(value);
-
-    queueMicrotask(() => {
-      if (MockImage.failingUrls.has(value)) {
-        this.onerror?.();
-        return;
-      }
-
-      this.onload?.();
-    });
-  }
-}
-
-function getProbeUrl(url: string) {
-  const probeUrl = new URL(url, window.location.origin);
-  probeUrl.searchParams.set('cacheProbe', '1');
-  return probeUrl.toString();
-}
 
 const photos = [
   {
@@ -124,55 +91,14 @@ const photos = [
   },
 ];
 
-const qiniuPhotos = photos.map((photo) => ({
-  ...photo,
-  url: photo.url.replace('https://r2.example.com/', 'https://qiniu.example.com/'),
-  thumbnailUrl: photo.thumbnailUrl.replace('https://r2.example.com/', 'https://qiniu.example.com/'),
-}));
-
-const mediaSourceStatuses: MediaSourceStatus[] = [
-  {
-    source: 'r2' as const,
-    isAvailable: true,
-    isDisabled: false,
-    status: 'available',
-  },
-  {
-    source: 'qiniu' as const,
-    isAvailable: true,
-    isDisabled: false,
-    status: 'available',
-    usage: {
-      period: '2026-04',
-      usedBytes: 1024 ** 3,
-      quotaBytes: 10 * 1024 ** 3,
-      remainingBytes: 9 * 1024 ** 3,
-      isDisabled: false,
-      isAvailable: true,
-      status: 'available',
-      lastUpdatedAt: '2026-04-06T00:00:00Z',
-    },
-  },
-  {
-    source: 'local' as const,
-    isAvailable: true,
-    isDisabled: false,
-    status: 'available',
-  },
-];
 
 describe('ExhibitionPage', () => {
   beforeEach(() => {
     mockedFetchPhotos.mockReset();
     mockedFetchPhotos.mockImplementation(async () => photos);
-    mockedFetchMediaSourceStatuses.mockReset();
-    mockedFetchMediaSourceStatuses.mockResolvedValue(mediaSourceStatuses);
     mockedResetPhotoRequestCache.mockReset();
     MockIntersectionObserver.instances = [];
-    MockImage.requestedUrls = [];
-    MockImage.failingUrls.clear();
     vi.stubGlobal('IntersectionObserver', MockIntersectionObserver);
-    vi.stubGlobal('Image', MockImage);
     vi.stubGlobal(
       'matchMedia',
       vi.fn().mockImplementation((query: string) => ({
@@ -189,9 +115,6 @@ describe('ExhibitionPage', () => {
     window.localStorage.clear();
     document.documentElement.removeAttribute('data-theme');
     resetLocation('/');
-    GALLERY_MEDIA_SOURCE_VISIBILITY.r2 = true;
-    GALLERY_MEDIA_SOURCE_VISIBILITY.qiniu = true;
-    GALLERY_MEDIA_SOURCE_VISIBILITY.local = true;
     Object.defineProperty(window, 'innerWidth', {
       writable: true,
       configurable: true,
@@ -275,90 +198,12 @@ describe('ExhibitionPage', () => {
     expect(screen.getByRole('button', { name: 'Close gallery settings' })).toHaveFocus();
     expect(screen.getByRole('button', { name: 'Newest first' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Random order' })).toBeInTheDocument();
-    expect(screen.getAllByRole('button', { name: 'Auto' })).toHaveLength(2);
-    expect(screen.getByRole('button', { name: 'R2' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Qiniu' })).toBeInTheDocument();
-    expect(screen.getByText('Qiniu monthly traffic')).toBeInTheDocument();
-    expect(screen.getByText('1.00 / 10.00 GB')).toBeInTheDocument();
-    expect(screen.getByLabelText('Selected waterfall column count').parentElement?.parentElement).toHaveClass('flex-col', 'sm:flex-row');
-    expect(screen.getByRole('progressbar', { name: 'Qiniu monthly traffic usage' })).toHaveAttribute('aria-valuenow', '10');
-  });
-
-  it('uses warning color when Qiniu traffic reaches 80 percent', async () => {
-    const user = userEvent.setup();
-
-    mockedFetchMediaSourceStatuses.mockResolvedValue([
-      mediaSourceStatuses[0],
-      {
-        ...mediaSourceStatuses[1],
-        usage: {
-          period: '2026-04',
-          usedBytes: 8 * 1024 ** 3,
-          quotaBytes: 10 * 1024 ** 3,
-          remainingBytes: 2 * 1024 ** 3,
-          isDisabled: false,
-          isAvailable: true,
-          status: 'available',
-          lastUpdatedAt: '2026-04-06T00:00:00Z',
-        },
-      },
-      mediaSourceStatuses[2],
-    ]);
-
-    render(<ExhibitionPage />);
-
-    await user.click(await screen.findByRole('button', { name: 'Open gallery settings' }));
-
-    const progressBar = screen.getByRole('progressbar', { name: 'Qiniu monthly traffic usage' });
-    expect(progressBar).toHaveAttribute('aria-valuenow', '80');
-    expect(progressBar.firstElementChild).toHaveClass('bg-amber-500');
-  });
-
-  it('uses critical color when Qiniu traffic reaches 100 percent', async () => {
-    const user = userEvent.setup();
-
-    mockedFetchMediaSourceStatuses.mockResolvedValue([
-      mediaSourceStatuses[0],
-      {
-        ...mediaSourceStatuses[1],
-        isDisabled: true,
-        usage: {
-          period: '2026-04',
-          usedBytes: 10 * 1024 ** 3,
-          quotaBytes: 10 * 1024 ** 3,
-          remainingBytes: 0,
-          isDisabled: true,
-          isAvailable: false,
-          status: 'over-quota',
-          lastUpdatedAt: '2026-04-06T00:00:00Z',
-        },
-      },
-      mediaSourceStatuses[2],
-    ]);
-
-    render(<ExhibitionPage />);
-
-    await user.click(await screen.findByRole('button', { name: 'Open gallery settings' }));
-
-    const progressBar = screen.getByRole('progressbar', { name: 'Qiniu monthly traffic usage' });
-    expect(progressBar).toHaveAttribute('aria-valuenow', '100');
-    expect(progressBar.firstElementChild).toHaveClass('bg-red-500');
-  });
-
-  it('hides auto when qiniu is hidden and removes the qiniu usage card', async () => {
-    const user = userEvent.setup();
-    GALLERY_MEDIA_SOURCE_VISIBILITY.qiniu = false;
-    GALLERY_MEDIA_SOURCE_VISIBILITY.local = false;
-
-    render(<ExhibitionPage />);
-
-    await user.click(await screen.findByRole('button', { name: 'Open gallery settings' }));
-
-    expect(screen.queryAllByRole('button', { name: 'Auto' })).toHaveLength(1);
-    expect(screen.getByRole('button', { name: 'R2' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Auto' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'R2' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Qiniu' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Server local' })).not.toBeInTheDocument();
-    expect(screen.queryByText('Qiniu monthly traffic')).not.toBeInTheDocument();
+    expect(screen.queryByText('Media source')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('gallery-build-id')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Selected waterfall column count').parentElement?.parentElement).toHaveClass('flex-col', 'sm:flex-row');
   });
 
   it('shows the current fixed column count in the stepper while auto is selected', async () => {
@@ -369,20 +214,7 @@ describe('ExhibitionPage', () => {
     await user.click(await screen.findByRole('button', { name: 'Open gallery settings' }));
 
     expect(screen.getByLabelText('Selected waterfall column count')).toHaveTextContent('4');
-    expect(screen.getAllByRole('button', { name: 'Auto' }).at(-1)).toHaveAttribute('aria-pressed', 'true');
-  });
-
-  it('hides auto when r2 is hidden', async () => {
-    const user = userEvent.setup();
-    GALLERY_MEDIA_SOURCE_VISIBILITY.r2 = false;
-
-    render(<ExhibitionPage />);
-
-    await user.click(await screen.findByRole('button', { name: 'Open gallery settings' }));
-
-    expect(screen.queryAllByRole('button', { name: 'Auto' })).toHaveLength(1);
-    expect(screen.queryByRole('button', { name: 'R2' })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Qiniu' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Auto' })).toHaveAttribute('aria-pressed', 'true');
   });
 
   it('updates the waterfall column count from gallery settings', async () => {
@@ -485,71 +317,6 @@ describe('ExhibitionPage', () => {
     expect(await screen.findByRole('heading', { name: 'March 2026' })).toBeInTheDocument();
   });
 
-  it('refetches photos when switching media source', async () => {
-    const user = userEvent.setup();
-
-    render(<ExhibitionPage />);
-
-    await screen.findByRole('button', { name: 'Open late-afternoon.jpg' });
-    expect(mockedFetchPhotos).toHaveBeenNthCalledWith(1, 'r2', expect.any(AbortSignal));
-
-    await user.click(screen.getByRole('button', { name: 'Open gallery settings' }));
-    await user.click(screen.getByRole('button', { name: 'Server local' }));
-
-    expect(mockedFetchPhotos).toHaveBeenNthCalledWith(2, 'local', expect.any(AbortSignal));
-  });
-
-  it('supports selecting qiniu as the media source', async () => {
-    const user = userEvent.setup();
-
-    render(<ExhibitionPage />);
-
-    await screen.findByRole('button', { name: 'Open late-afternoon.jpg' });
-    await user.click(screen.getByRole('button', { name: 'Open gallery settings' }));
-    await user.click(screen.getByRole('button', { name: 'Qiniu' }));
-
-    expect(mockedFetchPhotos).toHaveBeenNthCalledWith(2, 'qiniu', expect.any(AbortSignal));
-  });
-
-  it('probes the first auto media source with a reload fetch before rendering images', async () => {
-    window.localStorage.setItem(
-      GALLERY_SETTINGS_STORAGE_KEY,
-      JSON.stringify({
-        columnPreference: 'auto',
-        sortPreference: 'newest',
-        mediaSourcePreference: 'auto',
-      }),
-    );
-
-    render(<ExhibitionPage />);
-
-    await screen.findByRole('button', { name: 'Open late-afternoon.jpg' });
-
-    expect(MockImage.requestedUrls).toContain(getProbeUrl(photos[0].thumbnailUrl));
-  });
-
-  it('falls back to qiniu when the r2 probe fails', async () => {
-    window.localStorage.setItem(
-      GALLERY_SETTINGS_STORAGE_KEY,
-      JSON.stringify({
-        columnPreference: 'auto',
-        sortPreference: 'newest',
-        mediaSourcePreference: 'auto',
-      }),
-    );
-    mockedFetchPhotos.mockImplementation(async (mediaSource) => (mediaSource === 'qiniu' ? qiniuPhotos : photos));
-    MockImage.failingUrls.add(getProbeUrl(photos[0].thumbnailUrl));
-
-    render(<ExhibitionPage />);
-
-    await screen.findByRole('button', { name: 'Open late-afternoon.jpg' });
-
-    expect(mockedFetchPhotos).toHaveBeenNthCalledWith(1, 'r2', expect.any(AbortSignal));
-    expect(mockedFetchPhotos).toHaveBeenNthCalledWith(2, 'qiniu', expect.any(AbortSignal));
-    expect(MockImage.requestedUrls).toContain(getProbeUrl(photos[0].thumbnailUrl));
-    expect(MockImage.requestedUrls).toContain(getProbeUrl(qiniuPhotos[0].thumbnailUrl));
-  });
-
   it('hydrates localStorage custom column counts on first render', async () => {
     window.localStorage.setItem(
       GALLERY_SETTINGS_STORAGE_KEY,
@@ -563,24 +330,8 @@ describe('ExhibitionPage', () => {
     render(<ExhibitionPage />);
 
     await screen.findByRole('button', { name: 'Open late-afternoon.jpg' });
-    expect(mockedFetchPhotos).toHaveBeenNthCalledWith(1, 'local', expect.any(AbortSignal));
+    expect(mockedFetchPhotos).toHaveBeenNthCalledWith(1, 'r2', expect.any(AbortSignal));
     expect(screen.getAllByTestId(/waterfall-gallery/)[0]).toHaveAttribute('data-column-count', '6');
-  });
-
-  it('hydrates persisted qiniu settings when qiniu is available', async () => {
-    window.localStorage.setItem(
-      GALLERY_SETTINGS_STORAGE_KEY,
-      JSON.stringify({
-        columnPreference: 'auto',
-        sortPreference: 'newest',
-        mediaSourcePreference: 'qiniu',
-      }),
-    );
-
-    render(<ExhibitionPage />);
-
-    await screen.findByRole('button', { name: 'Open late-afternoon.jpg' });
-    expect(mockedFetchPhotos).toHaveBeenNthCalledWith(1, 'qiniu', expect.any(AbortSignal));
   });
 
   it('persists settings after the user changes them', async () => {
@@ -591,61 +342,11 @@ describe('ExhibitionPage', () => {
     await user.click(await screen.findByRole('button', { name: 'Open gallery settings' }));
     await user.click(screen.getByRole('button', { name: 'Increase waterfall columns' }));
     await user.click(screen.getByRole('button', { name: 'Random order' }));
-    await user.click(screen.getByRole('button', { name: 'Server local' }));
 
     expect(JSON.parse(window.localStorage.getItem(GALLERY_SETTINGS_STORAGE_KEY) ?? '{}')).toEqual({
       columnPreference: 5,
       sortPreference: 'random',
-      mediaSourcePreference: 'local',
-    });
-  });
-
-  it('falls back from persisted qiniu to r2 when qiniu is disabled', async () => {
-    const qiniuUsage = mediaSourceStatuses[1].usage;
-
-    if (qiniuUsage === undefined) {
-      throw new Error('Expected qiniu usage fixture to be defined.');
-    }
-
-    mockedFetchMediaSourceStatuses.mockResolvedValue([
-      mediaSourceStatuses[0],
-      {
-        ...mediaSourceStatuses[1],
-        isAvailable: false,
-        isDisabled: true,
-        status: 'over-quota',
-        message: 'Qiniu monthly traffic quota has been reached.',
-        usage: {
-          ...qiniuUsage,
-          usedBytes: 11 * 1024 ** 3,
-          quotaBytes: 10 * 1024 ** 3,
-          remainingBytes: 0,
-          isDisabled: true,
-          isAvailable: false,
-          status: 'over-quota',
-        },
-      },
-      mediaSourceStatuses[2],
-    ]);
-    window.localStorage.setItem(
-      GALLERY_SETTINGS_STORAGE_KEY,
-      JSON.stringify({
-        columnPreference: 'auto',
-        sortPreference: 'newest',
-        mediaSourcePreference: 'qiniu',
-      }),
-    );
-
-    render(<ExhibitionPage />);
-
-    await screen.findByRole('button', { name: 'Open late-afternoon.jpg' });
-    await waitFor(() => {
-      expect(mockedFetchPhotos).toHaveBeenCalledWith('r2', expect.any(AbortSignal));
-    });
-    expect(JSON.parse(window.localStorage.getItem(GALLERY_SETTINGS_STORAGE_KEY) ?? '{}')).toEqual({
-      columnPreference: 'auto',
-      sortPreference: 'newest',
-      mediaSourcePreference: 'auto',
+      mediaSourcePreference: 'r2',
     });
   });
 
@@ -666,28 +367,6 @@ describe('ExhibitionPage', () => {
     expect(screen.getAllByTestId(/waterfall-gallery/)[0]).toHaveAttribute('data-column-count', '8');
   });
 
-  it('normalizes persisted hidden media source preferences to r2 when auto is unavailable', async () => {
-    GALLERY_MEDIA_SOURCE_VISIBILITY.qiniu = false;
-    window.localStorage.setItem(
-      GALLERY_SETTINGS_STORAGE_KEY,
-      JSON.stringify({
-        columnPreference: 'auto',
-        sortPreference: 'newest',
-        mediaSourcePreference: 'qiniu',
-      }),
-    );
-
-    render(<ExhibitionPage />);
-
-    await screen.findByRole('button', { name: 'Open late-afternoon.jpg' });
-    expect(mockedFetchPhotos).toHaveBeenNthCalledWith(1, 'r2', expect.any(AbortSignal));
-    expect(JSON.parse(window.localStorage.getItem(GALLERY_SETTINGS_STORAGE_KEY) ?? '{}')).toEqual({
-      columnPreference: 'auto',
-      sortPreference: 'newest',
-      mediaSourcePreference: 'r2',
-    });
-  });
-
   it('restores saved settings after remount', async () => {
     const user = userEvent.setup();
 
@@ -695,7 +374,6 @@ describe('ExhibitionPage', () => {
 
     await user.click(await screen.findByRole('button', { name: 'Open gallery settings' }));
     await user.click(screen.getByRole('button', { name: 'Increase waterfall columns' }));
-    await user.click(screen.getByRole('button', { name: 'Server local' }));
 
     firstRender.unmount();
     mockedFetchPhotos.mockClear();
@@ -703,7 +381,7 @@ describe('ExhibitionPage', () => {
     render(<ExhibitionPage />);
 
     await screen.findByRole('button', { name: 'Open late-afternoon.jpg' });
-    expect(mockedFetchPhotos).toHaveBeenNthCalledWith(1, 'local', expect.any(AbortSignal));
+    expect(mockedFetchPhotos).toHaveBeenNthCalledWith(1, 'r2', expect.any(AbortSignal));
     expect(screen.getAllByTestId(/waterfall-gallery/)[0]).toHaveAttribute('data-column-count', '5');
   });
 
@@ -721,29 +399,6 @@ describe('ExhibitionPage', () => {
     await user.click(screen.getByTestId('gallery-settings-backdrop'));
 
     expect(screen.queryByRole('dialog', { name: 'Gallery settings' })).not.toBeInTheDocument();
-  });
-
-  it('disables the qiniu option when the source status says it is unavailable', async () => {
-    const user = userEvent.setup();
-
-    mockedFetchMediaSourceStatuses.mockResolvedValue([
-      mediaSourceStatuses[0],
-      {
-        ...mediaSourceStatuses[1],
-        isAvailable: false,
-        isDisabled: true,
-        status: 'over-quota',
-        message: 'Qiniu monthly traffic quota has been reached.',
-      },
-      mediaSourceStatuses[2],
-    ]);
-
-    render(<ExhibitionPage />);
-
-    await user.click(await screen.findByRole('button', { name: 'Open gallery settings' }));
-
-    expect(screen.getByRole('button', { name: 'Qiniu' })).toBeDisabled();
-    expect(screen.getByText('Qiniu monthly traffic quota has been reached.')).toBeInTheDocument();
   });
 
   it('opens the in-page viewer when a photo tile is clicked', async () => {
@@ -1083,33 +738,6 @@ describe('ExhibitionPage', () => {
     expect(mockedResetPhotoRequestCache.mock.calls.length).toBeGreaterThan(resetsBeforeRetry);
   });
 
-  it('aborts the previous request when the media source changes', async () => {
-    const user = userEvent.setup();
-    const firstRequest = Promise.resolve(photos);
-    const secondRequest = Promise.resolve(photos);
-
-    mockedFetchPhotos
-      .mockImplementationOnce((_mediaSource, signal) => {
-        expect(signal).toBeInstanceOf(AbortSignal);
-        return firstRequest;
-      })
-      .mockImplementationOnce((_mediaSource, signal) => {
-        expect(signal).toBeInstanceOf(AbortSignal);
-        return secondRequest;
-      });
-
-    render(<ExhibitionPage />);
-
-    const firstSignal = mockedFetchPhotos.mock.calls[0]?.[1];
-    expect(firstSignal?.aborted).toBe(false);
-
-    await user.click(await screen.findByRole('button', { name: 'Open gallery settings' }));
-    await user.click(screen.getByRole('button', { name: 'Server local' }));
-
-    expect(firstSignal?.aborted).toBe(true);
-    expect(mockedFetchPhotos).toHaveBeenNthCalledWith(2, 'local', expect.any(AbortSignal));
-  });
-
   it('does not show an error when a request is aborted during cleanup', async () => {
     mockedFetchPhotos.mockImplementation(
       () => Promise.reject(new DOMException('The operation was aborted.', 'AbortError')),
@@ -1212,29 +840,6 @@ describe('ExhibitionPage', () => {
     expect(screen.getByRole('button', { name: 'Open photo-0.jpg' })).toBeInTheDocument();
   });
 
-
-  it('shows media-source unavailable copy when no remote source can be reached', async () => {
-    window.localStorage.setItem(
-      GALLERY_SETTINGS_STORAGE_KEY,
-      JSON.stringify({
-        columnPreference: 'auto',
-        sortPreference: 'newest',
-        mediaSourcePreference: 'auto',
-      }),
-    );
-    mockedFetchPhotos.mockRejectedValue(new Error('No reachable remote media source.'));
-
-    render(<ExhibitionPage />);
-
-    expect(await screen.findByTestId('exhibition-status-error')).toBeInTheDocument();
-    expect(screen.getByText('Media is temporarily unavailable')).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        'None of the media sources could be reached right now. Try again, or choose another source in settings.',
-      ),
-    ).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
-  });
 
   it('applies dark data-theme from settings and persists gallery.theme', async () => {
     const user = userEvent.setup();

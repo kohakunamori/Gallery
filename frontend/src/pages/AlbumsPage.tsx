@@ -2,19 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { ExhibitionStatusPanel } from '../components/exhibition/ExhibitionStatusPanel';
 import { fetchAlbums } from '../services/albums';
 import type { Album } from '../types/album';
-import {
-  normalizeGalleryMediaSourcePreference,
-  readGallerySettings,
-  type GalleryConcreteMediaSource,
-} from '../utils/gallerySettings';
 import { buildAlbumPath } from '../utils/albumRoute';
-
-function resolveConcreteMediaSource(): GalleryConcreteMediaSource {
-  const preference = normalizeGalleryMediaSourcePreference(readGallerySettings().mediaSourcePreference);
-
-  // Albums list uses the visitor's preferred concrete source; auto defaults to r2.
-  return preference === 'auto' ? 'r2' : preference;
-}
 
 function formatPhotoCount(count: number): string {
   return count === 1 ? '1 photo' : `${count} photos`;
@@ -30,7 +18,7 @@ export function AlbumsPage() {
 
     setStatus('loading');
 
-    fetchAlbums(resolveConcreteMediaSource())
+    fetchAlbums('r2')
       .then((items) => {
         if (controller.signal.aborted) {
           return;
