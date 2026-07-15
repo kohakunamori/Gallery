@@ -141,6 +141,68 @@
   --settings-panel-soft-bg: rgba(38, 42, 52, 0.55);
 }
 
+/* 担当色 accent presets. `azure` is the default palette above; each accent
+   overrides only the primary trio, per theme, via data-accent on <html>. */
+[data-accent='scarlet'] {
+  --color-primary: 196 30 58;
+  --color-primary-container: 226 61 88;
+  --color-primary-fixed: 255 218 224;
+}
+
+[data-theme='dark'][data-accent='scarlet'] {
+  --color-primary: 255 138 154;
+  --color-primary-container: 214 71 96;
+  --color-primary-fixed: 95 26 38;
+}
+
+[data-accent='sapphire'] {
+  --color-primary: 33 64 195;
+  --color-primary-container: 63 96 226;
+  --color-primary-fixed: 219 224 255;
+}
+
+[data-theme='dark'][data-accent='sapphire'] {
+  --color-primary: 148 170 255;
+  --color-primary-container: 74 106 232;
+  --color-primary-fixed: 28 40 100;
+}
+
+[data-accent='emerald'] {
+  --color-primary: 11 128 88;
+  --color-primary-container: 22 158 111;
+  --color-primary-fixed: 205 240 224;
+}
+
+[data-theme='dark'][data-accent='emerald'] {
+  --color-primary: 111 214 173;
+  --color-primary-container: 32 150 108;
+  --color-primary-fixed: 16 66 48;
+}
+
+[data-accent='gold'] {
+  --color-primary: 158 108 0;
+  --color-primary-container: 190 136 14;
+  --color-primary-fixed: 255 232 184;
+}
+
+[data-theme='dark'][data-accent='gold'] {
+  --color-primary: 240 192 90;
+  --color-primary-container: 186 138 34;
+  --color-primary-fixed: 82 58 12;
+}
+
+[data-accent='sakura'] {
+  --color-primary: 197 48 122;
+  --color-primary-container: 224 82 151;
+  --color-primary-fixed: 255 218 236;
+}
+
+[data-theme='dark'][data-accent='sakura'] {
+  --color-primary: 255 150 200;
+  --color-primary-container: 216 84 148;
+  --color-primary-fixed: 92 28 58;
+}
+
 body {
   margin: 0;
   min-width: 320px;

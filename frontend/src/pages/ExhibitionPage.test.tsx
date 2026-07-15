@@ -5,6 +5,7 @@ import { ExhibitionPage } from './ExhibitionPage';
 import { fetchPhotos, resetPhotoRequestCache } from '../services/photos';
 import { GALLERY_SETTINGS_STORAGE_KEY } from '../utils/gallerySettings';
 import { GALLERY_THEME_STORAGE_KEY } from '../utils/galleryTheme';
+import { GALLERY_ACCENT_STORAGE_KEY } from '../utils/galleryAccent';
 
 vi.mock('../services/photos', () => ({
   fetchPhotos: vi.fn(),
@@ -114,6 +115,7 @@ describe('ExhibitionPage', () => {
     );
     window.localStorage.clear();
     document.documentElement.removeAttribute('data-theme');
+    document.documentElement.removeAttribute('data-accent');
     resetLocation('/');
     Object.defineProperty(window, 'innerWidth', {
       writable: true,
@@ -196,8 +198,8 @@ describe('ExhibitionPage', () => {
     expect(dialog).toBeInTheDocument();
     expect(dialog).toHaveClass('overflow-y-auto');
     expect(screen.getByRole('button', { name: 'Close gallery settings' })).toHaveFocus();
-    expect(screen.getByRole('button', { name: 'Newest first' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Random order' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Newest' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Random' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Auto' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'R2' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Qiniu' })).not.toBeInTheDocument();
@@ -241,7 +243,7 @@ describe('ExhibitionPage', () => {
     ]);
 
     await user.click(screen.getByRole('button', { name: 'Open gallery settings' }));
-    await user.click(screen.getByRole('button', { name: 'Oldest first' }));
+    await user.click(screen.getByRole('button', { name: 'Newest' }));
 
     const reorderedButtons = screen.getAllByRole('button', { name: /Open .*\.jpg/ });
     expect(reorderedButtons.map((button) => button.getAttribute('aria-label'))).toEqual([
@@ -262,7 +264,7 @@ describe('ExhibitionPage', () => {
 
     await screen.findAllByRole('button', { name: /Open .*\.jpg/ });
     await user.click(screen.getByRole('button', { name: 'Open gallery settings' }));
-    await user.click(screen.getByRole('button', { name: 'Random order' }));
+    await user.click(screen.getByRole('button', { name: 'Random' }));
 
     const monthHeadings = screen.getAllByRole('heading', { name: /^(March|February) 2026$/ });
     expect(monthHeadings.map((heading) => heading.textContent)).toEqual(['March 2026', 'February 2026']);
@@ -304,7 +306,7 @@ describe('ExhibitionPage', () => {
 
     await screen.findByRole('button', { name: 'Open april-0.jpg' });
     await user.click(screen.getByRole('button', { name: 'Open gallery settings' }));
-    await user.click(screen.getByRole('button', { name: 'Random order' }));
+    await user.click(screen.getByRole('button', { name: 'Random' }));
 
     expect(screen.queryByRole('heading', { name: 'March 2026' })).not.toBeInTheDocument();
 
@@ -341,7 +343,7 @@ describe('ExhibitionPage', () => {
 
     await user.click(await screen.findByRole('button', { name: 'Open gallery settings' }));
     await user.click(screen.getByRole('button', { name: 'Increase waterfall columns' }));
-    await user.click(screen.getByRole('button', { name: 'Random order' }));
+    await user.click(screen.getByRole('button', { name: 'Random' }));
 
     expect(JSON.parse(window.localStorage.getItem(GALLERY_SETTINGS_STORAGE_KEY) ?? '{}')).toEqual({
       columnPreference: 5,
@@ -859,6 +861,27 @@ describe('ExhibitionPage', () => {
 
     await screen.findByRole('banner');
     expect(document.documentElement.getAttribute('data-theme')).toBe('light');
+  });
+
+  it('applies the selected accent to data-accent and persists gallery.accent', async () => {
+    const user = userEvent.setup();
+
+    render(<ExhibitionPage />);
+
+    await user.click(await screen.findByRole('button', { name: 'Open gallery settings' }));
+    await user.click(screen.getByTestId('accent-option-scarlet'));
+
+    expect(document.documentElement.getAttribute('data-accent')).toBe('scarlet');
+    expect(window.localStorage.getItem(GALLERY_ACCENT_STORAGE_KEY)).toBe('scarlet');
+  });
+
+  it('hydrates accent preference and applies data-accent on first render', async () => {
+    window.localStorage.setItem(GALLERY_ACCENT_STORAGE_KEY, 'emerald');
+
+    render(<ExhibitionPage />);
+
+    await screen.findByRole('banner');
+    expect(document.documentElement.getAttribute('data-accent')).toBe('emerald');
   });
 
 });

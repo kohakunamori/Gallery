@@ -26,6 +26,12 @@ import {
   writeGalleryThemePreference,
 } from '../utils/galleryTheme';
 import type { GalleryThemePreference } from '../utils/galleryTheme';
+import {
+  applyGalleryAccent,
+  readGalleryAccentPreference,
+  writeGalleryAccentPreference,
+} from '../utils/galleryAccent';
+import type { GalleryAccentPreference } from '../utils/galleryAccent';
 import { LoadTrigger } from '../components/exhibition/LoadTrigger';
 import { PhotoViewerModal } from '../components/viewer/PhotoViewerModal';
 import { fetchPhotos, resetPhotoRequestCache } from '../services/photos';
@@ -74,6 +80,7 @@ export function ExhibitionPage() {
   const [columnPreference, setColumnPreference] = useState<GalleryColumnPreference>(persistedSettings.columnPreference);
   const [sortPreference, setSortPreference] = useState<GallerySortPreference>(persistedSettings.sortPreference);
   const [themePreference, setThemePreference] = useState<GalleryThemePreference>(readGalleryThemePreference);
+  const [accentPreference, setAccentPreference] = useState<GalleryAccentPreference>(readGalleryAccentPreference);
   const [reloadKey, setReloadKey] = useState(0);
   const previousScrollYRef = useRef(0);
   const upwardRevealDistanceRef = useRef(0);
@@ -198,6 +205,11 @@ export function ExhibitionPage() {
       mediaQuery.removeEventListener('change', syncSystemTheme);
     };
   }, [themePreference]);
+
+  useEffect(() => {
+    writeGalleryAccentPreference(accentPreference);
+    applyGalleryAccent(accentPreference);
+  }, [accentPreference]);
 
   const sortedPhotos = useMemo(() => sortPhotos(photos, sortPreference), [photos, sortPreference]);
   const allGroups = useMemo(() => groupPhotosByMonth(sortedPhotos), [sortedPhotos]);
@@ -387,9 +399,11 @@ export function ExhibitionPage() {
           columnPreference={columnPreference}
           sortPreference={sortPreference}
           themePreference={themePreference}
+          accentPreference={accentPreference}
           onSelectColumnPreference={setColumnPreference}
           onSelectSortPreference={setSortPreference}
           onSelectThemePreference={setThemePreference}
+          onSelectAccentPreference={setAccentPreference}
           onClose={closeSettings}
         />
       )}

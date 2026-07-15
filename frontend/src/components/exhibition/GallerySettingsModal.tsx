@@ -10,6 +10,8 @@ import {
   getFixedGalleryColumnCount,
 } from '../../utils/gallerySettings';
 import type { GalleryThemePreference } from '../../utils/galleryTheme';
+import { ACCENT_OPTIONS } from '../../utils/galleryAccent';
+import type { GalleryAccentPreference } from '../../utils/galleryAccent';
 import { getVisibleInitialFocusElement, trapTabKey } from '../../utils/dialogFocus';
 import { t } from '../../i18n';
 
@@ -27,18 +29,41 @@ type GallerySettingsModalProps = {
   columnPreference: GalleryColumnPreference;
   sortPreference: GallerySortPreference;
   themePreference: GalleryThemePreference;
+  accentPreference: GalleryAccentPreference;
   onSelectColumnPreference: (value: GalleryColumnPreference) => void;
   onSelectSortPreference: (value: GallerySortPreference) => void;
   onSelectThemePreference: (value: GalleryThemePreference) => void;
+  onSelectAccentPreference: (value: GalleryAccentPreference) => void;
   onClose: () => void;
 };
 
-const sortOptions: Array<{ value: GallerySortPreference; label: string }> = [
-  { value: 'newest', label: t('settings.sort.newest') },
-  { value: 'oldest', label: t('settings.sort.oldest') },
-  { value: 'filename-asc', label: t('settings.sort.filenameAsc') },
-  { value: 'filename-desc', label: t('settings.sort.filenameDesc') },
-  { value: 'random', label: t('settings.sort.random') },
+// Each toggle shows the direction it is currently in; clicking a selected
+// toggle flips its direction, clicking an unselected one activates it.
+const sortToggles: Array<{
+  key: string;
+  isSelected: (preference: GallerySortPreference) => boolean;
+  label: (preference: GallerySortPreference) => string;
+  next: (preference: GallerySortPreference) => GallerySortPreference;
+}> = [
+  {
+    key: 'date',
+    isSelected: (preference) => preference === 'newest' || preference === 'oldest',
+    label: (preference) => (preference === 'oldest' ? t('settings.sort.oldest') : t('settings.sort.newest')),
+    next: (preference) => (preference === 'newest' ? 'oldest' : 'newest'),
+  },
+  {
+    key: 'filename',
+    isSelected: (preference) => preference === 'filename-asc' || preference === 'filename-desc',
+    label: (preference) =>
+      preference === 'filename-desc' ? t('settings.sort.filenameDesc') : t('settings.sort.filenameAsc'),
+    next: (preference) => (preference === 'filename-asc' ? 'filename-desc' : 'filename-asc'),
+  },
+  {
+    key: 'random',
+    isSelected: (preference) => preference === 'random',
+    label: () => t('settings.sort.random'),
+    next: () => 'random',
+  },
 ];
 const themeOptions: Array<{ value: GalleryThemePreference; label: string }> = [
   { value: 'system', label: t('settings.theme.system') },
@@ -90,9 +115,11 @@ export function GallerySettingsModal({
   columnPreference,
   sortPreference,
   themePreference,
+  accentPreference,
   onSelectColumnPreference,
   onSelectSortPreference,
   onSelectThemePreference,
+  onSelectAccentPreference,
   onClose,
 }: GallerySettingsModalProps) {
   const dialogRef = useRef<HTMLDivElement | null>(null);
@@ -238,20 +265,54 @@ export function GallerySettingsModal({
           </div>
 
           <div className={getSectionCardClasses()}>
-            <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-on-surface-variant">{t('settings.sortOrder')}</p>
-            <div className="grid gap-3 sm:grid-cols-2">
-              {sortOptions.map((option) => {
-                const isSelected = option.value === sortPreference;
+            <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-on-surface-variant">{t('settings.accent')}</p>
+            <div className="flex flex-wrap items-center gap-3">
+              {ACCENT_OPTIONS.map((option) => {
+                const isSelected = option.value === accentPreference;
+                const label = t(`settings.accent.${option.value}`);
 
                 return (
                   <button
                     key={option.value}
                     type="button"
+                    title={label}
+                    aria-label={label}
                     aria-pressed={isSelected}
-                    onClick={() => onSelectSortPreference(option.value)}
-                    className={getOptionButtonClasses(isSelected)}
+                    onClick={() => onSelectAccentPreference(option.value)}
+                    data-testid={`accent-option-${option.value}`}
+                    className={`inline-flex h-11 w-11 items-center justify-center rounded-full border transition-all duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 md:h-9 md:w-9 ${
+                      isSelected
+                        ? 'settings-option-selected scale-105 ring-2 ring-primary/40'
+                        : 'settings-option md:hover:scale-105'
+                    }`}
                   >
-                    {renderOptionContent(option.label, isSelected)}
+                    <span
+                      aria-hidden="true"
+                      className="h-7 w-7 rounded-full shadow-[inset_0_1px_2px_rgba(255,255,255,0.4)] md:h-6 md:w-6"
+                      style={{ backgroundColor: option.swatchColor }}
+                    />
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className={getSectionCardClasses()}>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-on-surface-variant">{t('settings.sortOrder')}</p>
+            <div className="grid grid-cols-3 gap-3">
+              {sortToggles.map((toggle) => {
+                const isSelected = toggle.isSelected(sortPreference);
+
+                return (
+                  <button
+                    key={toggle.key}
+                    type="button"
+                    aria-pressed={isSelected}
+                    onClick={() => onSelectSortPreference(toggle.next(sortPreference))}
+                    className={getOptionButtonClasses(isSelected)}
+                    data-testid={`sort-option-${toggle.key}`}
+                  >
+                    {renderOptionContent(toggle.label(sortPreference), isSelected)}
                   </button>
                 );
               })}

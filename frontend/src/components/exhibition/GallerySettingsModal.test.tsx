@@ -7,9 +7,11 @@ const defaultProps = {
   columnPreference: 'auto' as const,
   sortPreference: 'newest' as const,
   themePreference: 'system' as const,
+  accentPreference: 'azure' as const,
   onSelectColumnPreference: vi.fn(),
   onSelectSortPreference: vi.fn(),
   onSelectThemePreference: vi.fn(),
+  onSelectAccentPreference: vi.fn(),
   onClose: vi.fn(),
 };
 
@@ -99,14 +101,36 @@ describe('GallerySettingsModal', () => {
     expect(dialog.contains(document.activeElement)).toBe(true);
   });
 
-  it('lets keyboard users change a sort option', async () => {
+  it('toggles the date sort direction when the selected toggle is clicked', async () => {
     const user = userEvent.setup();
     const onSelectSortPreference = vi.fn();
 
     render(<GallerySettingsModal {...defaultProps} onSelectSortPreference={onSelectSortPreference} />);
 
-    await user.click(screen.getByRole('button', { name: /Oldest first/i }));
+    await user.click(screen.getByRole('button', { name: /^Newest$/i }));
     expect(onSelectSortPreference).toHaveBeenCalledWith('oldest');
+  });
+
+  it('activates an unselected sort toggle without flipping its direction', async () => {
+    const user = userEvent.setup();
+    const onSelectSortPreference = vi.fn();
+
+    render(<GallerySettingsModal {...defaultProps} onSelectSortPreference={onSelectSortPreference} />);
+
+    await user.click(screen.getByTestId('sort-option-filename'));
+    expect(onSelectSortPreference).toHaveBeenCalledWith('filename-asc');
+
+    await user.click(screen.getByTestId('sort-option-random'));
+    expect(onSelectSortPreference).toHaveBeenCalledWith('random');
+  });
+
+  it('shows the current direction on the selected sort toggle', () => {
+    render(<GallerySettingsModal {...defaultProps} sortPreference="filename-desc" />);
+
+    const filenameToggle = screen.getByTestId('sort-option-filename');
+    expect(filenameToggle).toHaveAttribute('aria-pressed', 'true');
+    expect(filenameToggle).toHaveTextContent('Z–A');
+    expect(screen.getByTestId('sort-option-date')).toHaveAttribute('aria-pressed', 'false');
   });
 
   it('lets users change the theme preference and marks the current selection', async () => {
@@ -131,11 +155,30 @@ describe('GallerySettingsModal', () => {
     expect(onSelectThemePreference).toHaveBeenCalledWith('dark');
   });
 
+  it('lets users change the accent color and marks the current selection', async () => {
+    const user = userEvent.setup();
+    const onSelectAccentPreference = vi.fn();
+
+    render(
+      <GallerySettingsModal
+        {...defaultProps}
+        accentPreference="scarlet"
+        onSelectAccentPreference={onSelectAccentPreference}
+      />,
+    );
+
+    expect(screen.getByTestId('accent-option-scarlet')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('accent-option-azure')).toHaveAttribute('aria-pressed', 'false');
+
+    await user.click(screen.getByTestId('accent-option-sakura'));
+    expect(onSelectAccentPreference).toHaveBeenCalledWith('sakura');
+  });
+
   it('renders option controls with keyboard-reachable close actions', () => {
     render(<GallerySettingsModal {...defaultProps} />);
 
     const dialog = screen.getByRole('dialog', { name: 'Gallery settings' });
-    expect(within(dialog).getByRole('button', { name: /Newest first/i })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: /^Newest$/i })).toBeInTheDocument();
     expect(within(dialog).getByRole('button', { name: /System/i })).toBeInTheDocument();
     expect(dialog.querySelector('[data-settings-close="desktop"]')).not.toBeNull();
     expect(dialog.querySelector('[data-settings-close="mobile"]')).not.toBeNull();
