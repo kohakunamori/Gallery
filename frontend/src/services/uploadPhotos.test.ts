@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { uploadPhotos } from './uploadPhotos';
+import {
+  UPLOAD_GENERIC_ERROR_MESSAGE,
+  UPLOAD_TOKEN_ERROR_MESSAGE,
+} from '../utils/userFacingError';
 
 function streamResponse(chunks: string[]): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
@@ -90,7 +94,38 @@ describe('uploadPhotos', () => {
     expect(onOutput).toHaveBeenCalledWith('uploading r2', 'stdout');
   });
 
-  it('parses ndjson events split across chunk boundaries', async () => {
+  it('invokes onFile for file events with sequential index hints', async () => {
+    const onFile = vi.fn();
+    const first = { name: 'one.webp', path: 'uploads/one.webp', size: 4 };
+    const second = { name: 'two.webp', path: 'uploads/two.webp', size: 5 };
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        headers: new Headers({ 'Content-Type': 'application/x-ndjson' }),
+        body: streamResponse([
+          JSON.stringify({ type: 'file', file: first }) + '\n',
+          JSON.stringify({ type: 'file', file: second }) + '\n',
+          JSON.stringify({
+            type: 'complete',
+            files: [first, second],
+            output: [],
+          }) + '\n',
+        ]),
+      }),
+    );
+
+    await expect(uploadPhotos([new File(['body'], 'one.webp')], { onFile })).resolves.toEqual({
+      files: [first, second],
+      output: [],
+    });
+
+    expect(onFile).toHaveBeenCalledTimes(2);
+    expect(onFile).toHaveBeenNthCalledWith(1, first, 0);
+    expect(onFile).toHaveBeenNthCalledWith(2, second, 1);
+  });
+  it('parses ndjson events split across chunk boundaries', async () => {
     const completeEvent = JSON.stringify({
       type: 'complete',
       files: [{ name: 'fresh.webp', path: 'uploads/fresh.webp', size: 4 }],
@@ -112,7 +147,7 @@ describe('uploadPhotos', () => {
     });
   });
 
-  it('reports invalid html lines in upload streams', async () => {
+  it('maps invalid html stream lines to visitor-safe copy', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue({
@@ -123,7 +158,7 @@ describe('uploadPhotos', () => {
     );
 
     await expect(uploadPhotos([new File(['body'], 'fresh.webp')])).rejects.toThrow(
-      'Upload stream returned a server error: Fatal error',
+      UPLOAD_GENERIC_ERROR_MESSAGE,
     );
   });
 
@@ -201,16 +236,33 @@ describe('uploadPhotos', () => {
     );
   });
 
-  it('shows text from non-json error responses', async () => {
+  it('maps rejected upload tokens to calm copy', async () => {
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockResolvedValue(new Response('<br /> Fatal error', {
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 401,
+        json: async () => ({ error: 'Upload token is required or invalid.' }),
+      }),
+    );
+
+    await expect(uploadPhotos([new File(['body'], 'fresh.webp')])).rejects.toThrow(
+      UPLOAD_TOKEN_ERROR_MESSAGE,
+    );
+  });
+
+  it('maps fatal non-json dumps to short visitor-safe copy', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(new Response('<br /> Fatal error in /var/www/backend/public/index.php', {
         status: 500,
         headers: { 'Content-Type': 'text/html' },
       })),
     );
 
-    await expect(uploadPhotos([new File(['body'], 'fresh.webp')])).rejects.toThrow('Fatal error');
+    await expect(uploadPhotos([new File(['body'], 'fresh.webp')])).rejects.toThrow(
+      UPLOAD_GENERIC_ERROR_MESSAGE,
+    );
   });
 
   it('uses a status error when the response body is not JSON', async () => {

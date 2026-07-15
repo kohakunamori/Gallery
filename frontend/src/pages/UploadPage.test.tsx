@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { UploadPage } from './UploadPage';
@@ -32,6 +32,8 @@ function createDataTransfer(files: File[]) {
 
 describe('UploadPage', () => {
   beforeEach(() => {
+    localStorage.clear();
+
     if (typeof URL.createObjectURL !== 'function') {
       Object.defineProperty(URL, 'createObjectURL', {
         configurable: true,
@@ -54,6 +56,7 @@ describe('UploadPage', () => {
   });
 
   afterEach(() => {
+    localStorage.clear();
     vi.clearAllMocks();
     vi.restoreAllMocks();
   });
@@ -103,6 +106,9 @@ describe('UploadPage', () => {
 
     expect(await screen.findByText('Upload complete')).toBeInTheDocument();
     expect(screen.getByText(/Published 2 images/i)).toBeInTheDocument();
+    expect(screen.getByTestId('upload-success-hint')).toHaveTextContent(
+      /New photos appear under Newest sort without a hard reload/i,
+    );
     expect(screen.getByRole('link', { name: /View gallery/i })).toHaveAttribute('href', '/');
     expect(screen.getByRole('button', { name: /Upload more/i })).toBeInTheDocument();
     expect(mockedResetPhotoRequestCache).toHaveBeenCalled();
@@ -273,9 +279,96 @@ describe('UploadPage', () => {
     expect(screen.getByRole('button', { name: /Uploading/i })).toBeDisabled();
     expect(screen.getByRole('button', { name: /Cancel upload/i })).toBeInTheDocument();
     expect(screen.getByTestId('upload-dropzone')).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByTestId('upload-progress-label')).toHaveTextContent(/Uploading 0 of 1/i);
+    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '0');
+    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuemax', '1');
 
     resolveUpload?.({ files: [], output: ['streamed r2 line'] });
     expect(await screen.findByText('Upload complete')).toBeInTheDocument();
+  });
+
+  it('updates progress as file events arrive during upload', async () => {
+    const user = userEvent.setup();
+    const first = new File(['a'], 'one.webp', { type: 'image/webp' });
+    const second = new File(['b'], 'two.webp', { type: 'image/webp' });
+    let resolveUpload: ((value: {
+      files: Array<{ name: string; path: string; size: number }>;
+      output: string[];
+    }) => void) | undefined;
+    let onFile: ((file: { name: string; path: string; size: number }, indexHint?: number) => void) | undefined;
+
+    mockedUploadPhotos.mockImplementation((_files, options) => {
+      if (options !== undefined && !('aborted' in options)) {
+        onFile = options.onFile;
+      }
+
+      return new Promise((resolve) => {
+        resolveUpload = resolve;
+      });
+    });
+
+    render(<UploadPage />);
+
+    await user.upload(screen.getByLabelText(/Choose image files/i), [first, second]);
+    await user.click(screen.getByRole('button', { name: /Upload selected files/i }));
+
+    expect(await screen.findByTestId('upload-progress-label')).toHaveTextContent(/Uploading 0 of 2/i);
+
+    act(() => {
+      onFile?.({ name: 'one.webp', path: 'uploads/one.webp', size: first.size }, 0);
+    });
+    expect(await screen.findByTestId('upload-progress-label')).toHaveTextContent(/Uploading 1 of 2/i);
+    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '1');
+
+    act(() => {
+      onFile?.({ name: 'two.webp', path: 'uploads/two.webp', size: second.size }, 1);
+    });
+    expect(await screen.findByTestId('upload-progress-label')).toHaveTextContent(/Uploading 2 of 2/i);
+    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '2');
+
+    act(() => {
+      resolveUpload?.({
+        files: [
+          { name: 'one.webp', path: 'uploads/one.webp', size: first.size },
+          { name: 'two.webp', path: 'uploads/two.webp', size: second.size },
+        ],
+        output: [],
+      });
+    });
+
+    expect(await screen.findByText('Upload complete')).toBeInTheDocument();
+  });
+
+  it('remembers the upload token on this device when checked', async () => {
+    const user = userEvent.setup();
+    const file = new File(['image-body'], 'source.webp', { type: 'image/webp' });
+
+    mockedUploadPhotos.mockResolvedValue({
+      files: [{ name: 'source.webp', path: 'uploads/source.webp', size: file.size }],
+      output: [],
+    });
+
+    const { unmount } = render(<UploadPage />);
+
+    const tokenInput = screen.getByLabelText(/Upload token/i);
+    await user.type(tokenInput, 'device-token');
+    await user.click(screen.getByLabelText(/Remember token on this device/i));
+    await user.upload(screen.getByLabelText(/Choose image files/i), file);
+    await user.click(screen.getByRole('button', { name: /Upload selected files/i }));
+
+    expect(await screen.findByText('Upload complete')).toBeInTheDocument();
+    expect(localStorage.getItem('gallery.uploadToken')).toBe('device-token');
+
+    unmount();
+    render(<UploadPage />);
+
+    expect(screen.getByLabelText(/Upload token/i)).toHaveValue('device-token');
+    expect(screen.getByLabelText(/Remember token on this device/i)).toBeChecked();
+
+    await user.click(screen.getByRole('button', { name: /^Clear$/i }));
+    expect(screen.getByLabelText(/Upload token/i)).toHaveValue('');
+    expect(screen.getByLabelText(/Remember token on this device/i)).not.toBeChecked();
+    expect(localStorage.getItem('gallery.uploadToken')).toBeNull();
   });
 
   it('shows backend errors and keeps streamed output inspectable', async () => {
@@ -382,4 +475,24 @@ describe('UploadPage', () => {
     expect(screen.queryByText(/photos-index\.json/i)).not.toBeInTheDocument();
     expect(document.body.textContent).not.toMatch(/object storage/i);
   });
+  it('maps rejected upload tokens to calm copy without leaking paths', async () => {
+    const user = userEvent.setup();
+    const file = new File(['image-body'], 'source.webp', { type: 'image/webp' });
+
+    mockedUploadPhotos.mockRejectedValue(
+      new Error('That upload token was not accepted. Check the token and try again.'),
+    );
+
+    render(<UploadPage />);
+
+    await user.upload(screen.getByLabelText(/Choose image files/i), file);
+    await user.click(screen.getByRole('button', { name: /Upload selected files/i }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(
+      'That upload token was not accepted. Check the token and try again.',
+    );
+    expect(alert).not.toHaveTextContent(/photos-index\.json|\/var\/|Traceback/i);
+  });
+
 });

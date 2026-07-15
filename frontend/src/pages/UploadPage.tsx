@@ -9,13 +9,21 @@ import {
   useRef,
   useState,
 } from 'react';
+import { UploadDropzone } from '../components/upload/UploadDropzone';
+import { UploadPreviewGrid } from '../components/upload/UploadPreviewGrid';
+import {
+  MAX_VISIBLE_OUTPUT_LINES,
+  UploadTechnicalLog,
+} from '../components/upload/UploadTechnicalLog';
 import { resetPhotoRequestCache } from '../services/photos';
 import { uploadPhotos, type UploadPhotosResponse } from '../services/uploadPhotos';
+import { t } from '../i18n';
+import { toUserFacingError } from '../utils/userFacingError';
 
 const ACCEPTED_IMAGE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'tiff', 'avif', 'heic'] as const;
 const ACCEPT_ATTRIBUTE = ACCEPTED_IMAGE_EXTENSIONS.map((extension) => `.${extension}`).join(',');
 const ACCEPTED_EXTENSION_SET = new Set<string>(ACCEPTED_IMAGE_EXTENSIONS);
-const MAX_VISIBLE_OUTPUT_LINES = 200;
+const UPLOAD_TOKEN_STORAGE_KEY = 'gallery.uploadToken';
 
 type UploadStatus = 'idle' | 'uploading' | 'success' | 'error' | 'canceled';
 
@@ -114,47 +122,33 @@ function appendUniqueFiles(current: StagedImage[], incoming: File[]): StagedImag
   return additions.length === 0 ? current : [...current, ...additions];
 }
 
-type UploadScriptLogProps = {
-  hiddenLineCount: number;
-  lines: string[];
-  defaultOpen: boolean;
-};
-
-function UploadScriptLog({ hiddenLineCount, lines, defaultOpen }: UploadScriptLogProps) {
-  const [open, setOpen] = useState(defaultOpen);
-
-  useEffect(() => {
-    setOpen(defaultOpen);
-  }, [defaultOpen]);
-
-  if (lines.length === 0) {
-    return null;
+function readStoredUploadToken(): string {
+  try {
+    return localStorage.getItem(UPLOAD_TOKEN_STORAGE_KEY) ?? '';
+  } catch {
+    return '';
   }
+}
 
-  return (
-    <details
-      className="mt-5 rounded-2xl bg-surface-container-low p-4"
-      open={open}
-      onToggle={(event) => {
-        setOpen(event.currentTarget.open);
-      }}
-      data-testid="technical-log"
-    >
-      <summary className="cursor-pointer text-sm font-semibold text-on-surface">Technical log</summary>
-      {hiddenLineCount > 0 && (
-        <p className="mt-2 text-xs text-on-surface-variant">
-          Showing the last {MAX_VISIBLE_OUTPUT_LINES} lines; {hiddenLineCount} earlier lines hidden.
-        </p>
-      )}
-      <pre className="mt-3 max-h-80 overflow-auto whitespace-pre-wrap rounded-2xl bg-on-surface p-4 text-xs leading-6 text-surface-container-lowest">
-        {lines.join('\n')}
-      </pre>
-    </details>
-  );
+function writeStoredUploadToken(token: string): void {
+  try {
+    localStorage.setItem(UPLOAD_TOKEN_STORAGE_KEY, token);
+  } catch {
+    // Ignore storage failures (private mode, quota, etc.).
+  }
+}
+
+function clearStoredUploadToken(): void {
+  try {
+    localStorage.removeItem(UPLOAD_TOKEN_STORAGE_KEY);
+  } catch {
+    // Ignore storage failures.
+  }
 }
 
 export function UploadPage() {
   const fileInputId = useId();
+  const rememberTokenId = useId();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const activeUploadControllerRef = useRef<AbortController | null>(null);
   const dragDepthRef = useRef(0);
@@ -167,7 +161,10 @@ export function UploadPage() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [scriptOutput, setScriptOutput] = useState<string[]>([]);
   const [hiddenOutputLineCount, setHiddenOutputLineCount] = useState(0);
-  const [uploadToken, setUploadToken] = useState('');
+  const [uploadToken, setUploadToken] = useState(() => readStoredUploadToken());
+  const [rememberToken, setRememberToken] = useState(() => readStoredUploadToken() !== '');
+  const [completedUploadCount, setCompletedUploadCount] = useState(0);
+  const [uploadTotalCount, setUploadTotalCount] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
   const [dropMessage, setDropMessage] = useState<string | null>(null);
   const [brokenPreviews, setBrokenPreviews] = useState<Record<string, true>>({});
@@ -176,6 +173,9 @@ export function UploadPage() {
 
   const totalSize = useMemo(() => staged.reduce((sum, item) => sum + item.file.size, 0), [staged]);
   const isUploading = status === 'uploading';
+  const progressValue = Math.min(completedUploadCount, uploadTotalCount);
+  const progressMax = Math.max(uploadTotalCount, 1);
+  const progressPercent = uploadTotalCount === 0 ? 0 : Math.round((progressValue / uploadTotalCount) * 100);
 
   useEffect(
     () => () => {
@@ -192,6 +192,8 @@ export function UploadPage() {
     setScriptOutput([]);
     setHiddenOutputLineCount(0);
     totalOutputLineCountRef.current = 0;
+    setCompletedUploadCount(0);
+    setUploadTotalCount(0);
     setDropMessage(null);
   };
 
@@ -262,6 +264,12 @@ export function UploadPage() {
 
   const cancelActiveUpload = () => {
     activeUploadControllerRef.current?.abort();
+  };
+
+  const handleClearRememberedToken = () => {
+    clearStoredUploadToken();
+    setUploadToken('');
+    setRememberToken(false);
   };
 
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
@@ -375,6 +383,8 @@ export function UploadPage() {
       setScriptOutput([]);
       setHiddenOutputLineCount(0);
       totalOutputLineCountRef.current = 0;
+      setCompletedUploadCount(0);
+      setUploadTotalCount(0);
       return;
     }
 
@@ -387,6 +397,8 @@ export function UploadPage() {
     setScriptOutput([]);
     setHiddenOutputLineCount(0);
     totalOutputLineCountRef.current = 0;
+    setCompletedUploadCount(0);
+    setUploadTotalCount(staged.length);
     setDropMessage(null);
 
     try {
@@ -395,14 +407,34 @@ export function UploadPage() {
         signal: controller.signal,
         uploadToken,
         onOutput: (line) => appendScriptOutput(line),
+        onFile: (_file, indexHint) => {
+          if (typeof indexHint === 'number') {
+            setCompletedUploadCount(indexHint + 1);
+          } else {
+            setCompletedUploadCount((current) => current + 1);
+          }
+        },
       });
 
       setResult({
         ...nextResult,
         output: trimOutputLines(nextResult.output),
       });
+      setCompletedUploadCount(nextResult.files.length > 0 ? nextResult.files.length : staged.length);
       setStatus('success');
       resetPhotoRequestCache();
+
+      if (rememberToken) {
+        const tokenToStore = uploadToken.trim();
+
+        if (tokenToStore !== '') {
+          writeStoredUploadToken(tokenToStore);
+        } else {
+          clearStoredUploadToken();
+        }
+      } else {
+        clearStoredUploadToken();
+      }
     } catch (error: unknown) {
       if (isAbortError(error)) {
         setStatus('canceled');
@@ -412,7 +444,7 @@ export function UploadPage() {
       }
 
       setStatus('error');
-      setErrorMessage(error instanceof Error ? error.message : 'Upload failed.');
+      setErrorMessage(toUserFacingError(error, 'upload'));
     } finally {
       if (activeUploadControllerRef.current === controller) {
         activeUploadControllerRef.current = null;
@@ -421,69 +453,50 @@ export function UploadPage() {
   };
 
   const successOutput = result !== null && result.output.length > 0 ? result.output : scriptOutput;
-  const dropzoneClassName = [
-    'relative block rounded-[28px] border border-dashed p-6 transition-colors motion-reduce:transition-none',
-    isDragging
-      ? 'border-primary bg-primary/5'
-      : 'border-outline-variant bg-surface-container-low hover:bg-surface-container',
-    isUploading ? 'cursor-not-allowed opacity-70' : 'cursor-pointer',
-  ].join(' ');
+
+  const previewItems = staged.map((item) => ({
+    key: item.key,
+    name: item.file.name,
+    sizeLabel: formatBytes(item.file.size),
+    previewUrl: item.previewUrl,
+    isBroken: brokenPreviews[item.key] === true,
+  }));
 
   return (
     <main className="min-h-screen bg-surface px-4 py-8 text-on-surface md:px-8 md:py-12">
       <section className="mx-auto max-w-4xl">
-        <a className="text-sm font-medium text-primary hover:underline" href="/">
-          Back to gallery
+        <a className="text-sm font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40" href="/">
+          {t('upload.backToGallery')}
         </a>
 
         <div className="mt-8 rounded-[32px] bg-surface-container-lowest p-6 shadow-ambient md:p-10">
           <div className="max-w-2xl">
-            <p className="text-sm font-semibold uppercase tracking-[0.28em] text-primary">Gallery upload</p>
+            <p className="text-sm font-semibold uppercase tracking-[0.28em] text-primary">{t('upload.eyebrow')}</p>
             <h1 className="mt-3 font-headline text-4xl font-bold tracking-[-0.04em] text-on-surface md:text-5xl">
-              Add images to the gallery
+              {t('upload.heading')}
             </h1>
             <p className="mt-4 text-base leading-7 text-on-surface-variant">
-              Drop images here or browse your device. Selected files are published to the gallery media store and then
-              cleared from temporary staging on this server.
+              {t('upload.intro')}
             </p>
           </div>
 
           <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
-            <div
-              className={dropzoneClassName}
+            <UploadDropzone
+              acceptAttribute={ACCEPT_ATTRIBUTE}
+              acceptedExtensions={ACCEPTED_IMAGE_EXTENSIONS}
+              describedById={`${fileInputId}-help`}
+              fileInputId={fileInputId}
+              fileInputRef={fileInputRef}
+              isDragging={isDragging}
+              isUploading={isUploading}
+              onBrowseClick={handleBrowseClick}
               onDragEnter={handleDragEnter}
-              onDragOver={handleDragOver}
               onDragLeave={handleDragLeave}
+              onDragOver={handleDragOver}
               onDrop={handleDrop}
-              onClick={handleBrowseClick}
-              onKeyDown={handleDropzoneKeyDown}
-              role="button"
-              tabIndex={isUploading ? -1 : 0}
-              aria-disabled={isUploading}
-              aria-describedby={`${fileInputId}-help`}
-              data-testid="upload-dropzone"
-            >
-              <span className="block text-base font-semibold text-on-surface">Drop images here or browse</span>
-              <span id={`${fileInputId}-help`} className="mt-2 block text-sm text-on-surface-variant">
-                Supported extensions: {ACCEPTED_IMAGE_EXTENSIONS.join(', ')}
-              </span>
-              <span className="mt-5 inline-flex min-h-11 items-center rounded-full bg-primary px-5 text-sm font-semibold text-white">
-                Choose image files
-              </span>
-              <input
-                ref={fileInputRef}
-                id={fileInputId}
-                className="sr-only"
-                type="file"
-                name="files"
-                accept={ACCEPT_ATTRIBUTE}
-                multiple
-                disabled={isUploading}
-                onChange={handleFileChange}
-                onClick={(event) => event.stopPropagation()}
-                aria-label="Choose image files"
-              />
-            </div>
+              onDropzoneKeyDown={handleDropzoneKeyDown}
+              onFileChange={handleFileChange}
+            />
 
             {dropMessage !== null && (
               <p className="text-sm text-on-surface-variant" role="status">
@@ -491,105 +504,74 @@ export function UploadPage() {
               </p>
             )}
 
-            <label className="block rounded-[24px] bg-surface-container-low p-5">
-              <span className="block text-sm font-semibold text-on-surface">Upload token</span>
-              <span className="mt-1 block text-xs text-on-surface-variant">
-                Required only when the server is configured with one.
-              </span>
-              <input
-                className="mt-3 block w-full rounded-2xl border border-outline-variant bg-surface-container-lowest px-4 py-3 text-sm text-on-surface"
-                type="password"
-                autoComplete="off"
-                value={uploadToken}
-                onChange={(event) => setUploadToken(event.target.value)}
-              />
-            </label>
+            <div className="rounded-[24px] bg-surface-container-low p-5">
+              <label className="block">
+                <span className="block text-sm font-semibold text-on-surface">{t('upload.token')}</span>
+                <span className="mt-1 block text-xs text-on-surface-variant">
+                  {t('upload.tokenHint')}
+                </span>
+                <input
+                  className="mt-3 block w-full rounded-2xl border border-outline-variant bg-surface-container-lowest px-4 py-3 text-sm text-on-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                  type="password"
+                  autoComplete="off"
+                  value={uploadToken}
+                  onChange={(event) => setUploadToken(event.target.value)}
+                  disabled={isUploading}
+                />
+              </label>
 
-            {staged.length > 0 && (
-              <section className="rounded-[24px] bg-surface-container-low p-5" aria-label="Selected files">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <h2 className="font-headline text-xl font-semibold tracking-[-0.02em]">Selected files</h2>
-                  <div className="flex flex-wrap items-center gap-3">
-                    <p className="text-sm text-on-surface-variant">
-                      {staged.length} file{staged.length === 1 ? '' : 's'} · {formatBytes(totalSize)}
-                    </p>
-                    {staged.length >= 2 && (
-                      <button
-                        type="button"
-                        className="text-sm font-semibold text-primary hover:underline"
-                        onClick={clearAllStaged}
-                        disabled={isUploading}
-                      >
-                        Clear all
-                      </button>
-                    )}
-                  </div>
-                </div>
+              <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2">
+                <label className="inline-flex items-center gap-2 text-sm text-on-surface" htmlFor={rememberTokenId}>
+                  <input
+                    id={rememberTokenId}
+                    className="size-4 rounded border-outline-variant text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                    type="checkbox"
+                    checked={rememberToken}
+                    onChange={(event) => setRememberToken(event.target.checked)}
+                    disabled={isUploading}
+                  />
+                  <span>{t('upload.rememberToken')}</span>
+                </label>
 
-                <ul className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4" data-testid="upload-preview-grid">
-                  {staged.map((item) => {
-                    const isBroken = brokenPreviews[item.key] === true;
+                {(rememberToken || uploadToken !== '') && (
+                  <button
+                    type="button"
+                    className="text-sm font-semibold text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:cursor-not-allowed disabled:opacity-50"
+                    onClick={handleClearRememberedToken}
+                    disabled={isUploading}
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+            </div>
 
-                    return (
-                      <li
-                        className="overflow-hidden rounded-2xl border border-outline-variant/50 bg-surface-container-lowest"
-                        key={item.key}
-                      >
-                        <div className="relative aspect-square bg-surface-container">
-                          {isBroken ? (
-                            <div className="flex h-full items-center justify-center p-3 text-center text-xs text-on-surface-variant">
-                              Preview unavailable
-                            </div>
-                          ) : (
-                            <img
-                              src={item.previewUrl}
-                              alt=""
-                              className="h-full w-full object-cover"
-                              onError={() => {
-                                setBrokenPreviews((current) => ({ ...current, [item.key]: true }));
-                              }}
-                            />
-                          )}
-                        </div>
-                        <div className="space-y-2 p-3">
-                          <p className="truncate text-sm font-medium text-on-surface" title={item.file.name}>
-                            {item.file.name}
-                          </p>
-                          <div className="flex items-center justify-between gap-2">
-                            <p className="text-xs text-on-surface-variant">{formatBytes(item.file.size)}</p>
-                            <button
-                              type="button"
-                              className="text-xs font-semibold text-primary hover:underline disabled:cursor-not-allowed disabled:opacity-50"
-                              onClick={() => removeStagedItem(item.key)}
-                              disabled={isUploading}
-                              aria-label={`Remove ${item.file.name}`}
-                            >
-                              Remove
-                            </button>
-                          </div>
-                        </div>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </section>
-            )}
+            <UploadPreviewGrid
+              items={previewItems}
+              totalSizeLabel={formatBytes(totalSize)}
+              isUploading={isUploading}
+              onClearAll={clearAllStaged}
+              onRemoveItem={removeStagedItem}
+              onPreviewError={(key) => {
+                setBrokenPreviews((current) => ({ ...current, [key]: true }));
+              }}
+            />
 
             <div className="flex flex-wrap gap-3">
               <button
-                className="inline-flex min-h-12 items-center justify-center rounded-full bg-primary px-6 text-sm font-semibold text-white transition hover:bg-primary-container disabled:cursor-not-allowed disabled:bg-outline disabled:text-surface-container-lowest"
+                className="inline-flex min-h-12 items-center justify-center rounded-full bg-primary px-6 text-sm font-semibold text-white transition hover:bg-primary-container focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:cursor-not-allowed disabled:bg-outline disabled:text-surface-container-lowest"
                 type="submit"
                 disabled={isUploading}
               >
-                {isUploading ? 'Uploading…' : 'Upload selected files'}
+                {isUploading ? t('upload.uploading') : t('upload.submit')}
               </button>
               {isUploading && (
                 <button
-                  className="inline-flex min-h-12 items-center justify-center rounded-full border border-outline-variant px-6 text-sm font-semibold text-on-surface transition hover:bg-surface-container"
+                  className="inline-flex min-h-12 items-center justify-center rounded-full border border-outline-variant px-6 text-sm font-semibold text-on-surface transition hover:bg-surface-container focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
                   type="button"
                   onClick={cancelActiveUpload}
                 >
-                  Cancel upload
+                  {t('upload.cancel')}
                 </button>
               )}
             </div>
@@ -598,35 +580,60 @@ export function UploadPage() {
 
         {status === 'canceled' && (
           <section className="mt-6 rounded-[24px] bg-surface-container-lowest p-5 shadow-ambient" role="status">
-            <h2 className="font-semibold">Upload canceled</h2>
-            <p className="mt-2 text-sm text-on-surface-variant">The active upload was canceled before completion.</p>
+            <h2 className="font-semibold">{t('upload.canceled')}</h2>
+            <p className="mt-2 text-sm text-on-surface-variant">{t('upload.canceledBody')}</p>
           </section>
         )}
 
         {status === 'error' && errorMessage !== null && (
           <section className="mt-6 rounded-[24px] border border-red-200 bg-red-50 p-5 text-red-800" role="alert">
-            <h2 className="font-semibold">Upload failed</h2>
+            <h2 className="font-semibold">{t('upload.failed')}</h2>
             <p className="mt-2 whitespace-pre-wrap text-sm">{errorMessage}</p>
             {scriptOutput.length > 0 && (
-              <UploadScriptLog hiddenLineCount={hiddenOutputLineCount} lines={scriptOutput} defaultOpen />
+              <UploadTechnicalLog hiddenLineCount={hiddenOutputLineCount} lines={scriptOutput} defaultOpen />
             )}
           </section>
         )}
 
         {status === 'uploading' && (
           <section className="mt-6 rounded-[24px] bg-surface-container-lowest p-5 shadow-ambient" aria-live="polite">
-            <p className="text-sm font-medium text-on-surface">Uploading…</p>
+            <p className="text-sm font-medium text-on-surface" data-testid="upload-progress-label">
+              {uploadTotalCount > 0
+                ? `Uploading ${Math.min(completedUploadCount, uploadTotalCount)} of ${uploadTotalCount}…`
+                : 'Uploading…'}
+            </p>
+            <div
+              className="mt-3 h-2 overflow-hidden rounded-full bg-surface-container"
+              role="progressbar"
+              aria-valuemin={0}
+              aria-valuemax={progressMax}
+              aria-valuenow={progressValue}
+              aria-label={
+                uploadTotalCount > 0
+                  ? `Uploading ${Math.min(completedUploadCount, uploadTotalCount)} of ${uploadTotalCount}`
+                  : 'Uploading'
+              }
+              data-testid="upload-progress"
+            >
+              <div
+                className="h-full rounded-full bg-primary transition-[width] duration-300 ease-out motion-reduce:transition-none"
+                style={{ width: `${progressPercent}%` }}
+              />
+            </div>
             {scriptOutput.length > 0 && (
-              <UploadScriptLog hiddenLineCount={hiddenOutputLineCount} lines={scriptOutput} defaultOpen />
+              <UploadTechnicalLog hiddenLineCount={hiddenOutputLineCount} lines={scriptOutput} defaultOpen />
             )}
           </section>
         )}
 
         {status === 'success' && result !== null && (
           <section className="mt-6 rounded-[24px] bg-surface-container-lowest p-5 shadow-ambient" aria-live="polite">
-            <h2 className="font-headline text-2xl font-semibold tracking-[-0.03em]">Upload complete</h2>
+            <h2 className="font-headline text-2xl font-semibold tracking-[-0.03em]">{t('upload.complete')}</h2>
             <p className="mt-2 text-sm text-on-surface-variant">
               Published {result.files.length} image{result.files.length === 1 ? '' : 's'}.
+            </p>
+            <p className="mt-2 text-sm text-on-surface-variant" data-testid="upload-success-hint">
+              New photos appear under Newest sort without a hard reload.
             </p>
 
             {result.files.length > 0 && (
@@ -645,19 +652,19 @@ export function UploadPage() {
                 href="/"
                 className="inline-flex min-h-12 items-center justify-center rounded-full bg-primary px-6 text-sm font-semibold text-white transition hover:bg-primary-container focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
               >
-                View gallery
+                {t('upload.viewGallery')}
               </a>
               <button
                 type="button"
                 className="inline-flex min-h-12 items-center justify-center rounded-full border border-outline-variant px-6 text-sm font-semibold text-on-surface transition hover:bg-surface-container focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
                 onClick={resetForMoreUploads}
               >
-                Upload more
+                {t('upload.uploadMore')}
               </button>
             </div>
 
             {successOutput.length > 0 && (
-              <UploadScriptLog
+              <UploadTechnicalLog
                 hiddenLineCount={hiddenOutputLineCount}
                 lines={successOutput}
                 defaultOpen={false}

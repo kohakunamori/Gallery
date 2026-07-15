@@ -1,3 +1,5 @@
+import { mapUserFacingError } from '../utils/userFacingError';
+
 export type UploadPhotoResult = {
   name: string;
   path: string;
@@ -15,6 +17,7 @@ export type UploadPhotosOptions = {
   signal?: AbortSignal;
   uploadToken?: string;
   onOutput?: (line: string, stream: UploadOutputStream) => void;
+  onFile?: (file: UploadPhotoResult, indexHint?: number) => void;
 };
 
 type UploadStreamEvent =
@@ -42,12 +45,25 @@ export async function uploadPhotos(
     headers['X-Upload-Token'] = uploadToken;
   }
 
-  const response = await fetch('/upload', {
-    method: 'POST',
-    body: formData,
-    signal: options.signal,
-    ...(Object.keys(headers).length > 0 ? { headers } : {}),
-  });
+  let response: Response;
+
+  try {
+    response = await fetch('/upload', {
+      method: 'POST',
+      body: formData,
+      signal: options.signal,
+      ...(Object.keys(headers).length > 0 ? { headers } : {}),
+    });
+  } catch (error: unknown) {
+    if (isAbortError(error)) {
+      throw error;
+    }
+
+    throw new Error(mapUserFacingError({
+      message: error instanceof Error ? error.message : undefined,
+      context: 'upload',
+    }));
+  }
 
   if (!response.ok) {
     const errorMessage = await readErrorMessage(response);
@@ -68,19 +84,30 @@ export async function uploadPhotos(
 
 async function readErrorMessage(response: Response): Promise<string> {
   const contentType = response.headers?.get('Content-Type') ?? '';
+  let rawMessage = '';
 
   if (contentType.includes('application/json') || typeof response.text !== 'function') {
     const payload = (await response.json().catch(() => null)) as { error?: string } | null;
 
     if (typeof payload?.error === 'string' && payload.error !== '') {
-      return payload.error;
+      rawMessage = payload.error;
     }
   }
 
-  const text = typeof response.text === 'function' ? await response.text().catch(() => '') : '';
-  const normalizedText = text.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+  if (rawMessage === '' && typeof response.text === 'function') {
+    const text = await response.text().catch(() => '');
+    rawMessage = text.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+  }
 
-  return normalizedText === '' ? `Upload failed with status ${response.status}` : normalizedText;
+  return mapUserFacingError({
+    status: response.status,
+    message: rawMessage === '' ? `Upload failed with status ${response.status}` : rawMessage,
+    context: 'upload',
+  });
+}
+
+function isAbortError(error: unknown): error is DOMException {
+  return error instanceof DOMException && error.name === 'AbortError';
 }
 
 function normalizeOptions(optionsOrSignal: UploadPhotosOptions | AbortSignal | undefined): UploadPhotosOptions {
@@ -103,6 +130,7 @@ async function readUploadEventStream(response: Response, options: UploadPhotosOp
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   const output: string[] = [];
+  const completedFileCount = { value: 0 };
   let buffer = '';
 
   while (true) {
@@ -117,7 +145,7 @@ async function readUploadEventStream(response: Response, options: UploadPhotosOp
     buffer = lines.pop() ?? '';
 
     for (const line of lines) {
-      const result = handleUploadStreamLine(line, output, options);
+      const result = handleUploadStreamLine(line, output, options, completedFileCount);
 
       if (result !== null) {
         return result;
@@ -128,7 +156,7 @@ async function readUploadEventStream(response: Response, options: UploadPhotosOp
   buffer += decoder.decode();
 
   if (buffer.trim() !== '') {
-    const result = handleUploadStreamLine(buffer, output, options);
+    const result = handleUploadStreamLine(buffer, output, options, completedFileCount);
 
     if (result !== null) {
       return result;
@@ -147,11 +175,21 @@ function parseUploadStreamEvent(line: string): UploadStreamEvent {
     const normalizedLine = line.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
     const message = normalizedLine === '' ? 'Upload stream contained an invalid response.' : normalizedLine;
 
-    throw new Error(`Upload stream returned a server error: ${message}`);
+    throw new Error(
+      mapUserFacingError({
+        message: `Upload stream returned a server error: ${message}`,
+        context: 'upload',
+      }),
+    );
   }
 
   if (!isRecord(event) || typeof event.type !== 'string') {
-    throw new Error('Upload stream contained an invalid event.');
+    throw new Error(
+      mapUserFacingError({
+        message: 'Upload stream contained an invalid event.',
+        context: 'upload',
+      }),
+    );
   }
 
   if (event.type === 'file') {
@@ -205,6 +243,7 @@ function handleUploadStreamLine(
   line: string,
   output: string[],
   options: UploadPhotosOptions,
+  completedFileCount: { value: number },
 ): UploadPhotosResponse | null {
   if (line.trim() === '') {
     return null;
@@ -219,6 +258,14 @@ function handleUploadStreamLine(
     return null;
   }
 
+  if (event.type === 'file') {
+    const indexHint = completedFileCount.value;
+    completedFileCount.value += 1;
+    options.onFile?.(event.file, indexHint);
+
+    return null;
+  }
+
   if (event.type === 'complete') {
     return {
       files: event.files,
@@ -227,7 +274,12 @@ function handleUploadStreamLine(
   }
 
   if (event.type === 'error') {
-    throw new Error(event.error ?? 'Upload failed.');
+    throw new Error(
+      mapUserFacingError({
+        message: event.error ?? 'Upload failed.',
+        context: 'upload',
+      }),
+    );
   }
 
   return null;
@@ -235,18 +287,33 @@ function handleUploadStreamLine(
 
 function parseUploadResponse(payload: unknown): UploadPhotosResponse {
   if (!isRecord(payload)) {
-    throw new Error('Invalid upload response.');
+    throw new Error(
+      mapUserFacingError({
+        message: 'Invalid upload response.',
+        context: 'upload',
+      }),
+    );
   }
 
   const files = payload.files;
   const output = payload.output;
 
   if (!Array.isArray(files) || !files.every(isUploadPhotoResult)) {
-    throw new Error('Invalid upload response.');
+    throw new Error(
+      mapUserFacingError({
+        message: 'Invalid upload response.',
+        context: 'upload',
+      }),
+    );
   }
 
   if (!Array.isArray(output) || !output.every(isString)) {
-    throw new Error('Invalid upload response.');
+    throw new Error(
+      mapUserFacingError({
+        message: 'Invalid upload response.',
+        context: 'upload',
+      }),
+    );
   }
 
   return { files, output };
