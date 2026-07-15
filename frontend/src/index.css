@@ -45,16 +45,108 @@
 }
 
 :root {
+  color-scheme: light;
   font-family: Inter, system-ui, sans-serif;
-  color: #1a1c1c;
-  background: #f9f9f9;
+  color: rgb(var(--color-on-surface));
+  background: rgb(var(--color-background));
+
+  --color-background: 249 249 249;
+  --color-surface: 249 249 249;
+  --color-surface-container: 238 238 238;
+  --color-surface-container-low: 243 243 243;
+  --color-surface-container-lowest: 255 255 255;
+  --color-surface-container-high: 232 232 232;
+  --color-primary: 0 91 179;
+  --color-primary-container: 0 115 224;
+  --color-primary-fixed: 214 227 255;
+  --color-outline: 113 119 133;
+  --color-outline-variant: 193 198 214;
+  --color-on-surface: 26 28 28;
+  --color-on-surface-variant: 65 71 84;
+
+  --shadow-ambient: 0 24px 60px rgba(26, 28, 28, 0.08);
+  --shadow-chrome: 0 12px 36px rgba(15, 23, 42, 0.08);
+  --shadow-chrome-scrolled: 0 10px 24px rgba(15, 23, 42, 0.12);
+
+  --settings-sheet-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(248, 250, 255, 0.78));
+  --settings-sheet-shadow: 0 24px 80px rgba(15, 23, 42, 0.18);
+  --settings-section-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(248, 250, 255, 0.52));
+  --settings-section-shadow: 0 10px 28px rgba(15, 23, 42, 0.06);
+  --settings-option-idle-bg: rgba(255, 255, 255, 0.5);
+  --settings-option-idle-border: rgba(255, 255, 255, 0.45);
+  --settings-option-idle-shadow: 0 6px 18px rgba(15, 23, 42, 0.05);
+  --settings-option-selected-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(244, 248, 255, 0.92));
+  --settings-option-selected-border: rgba(255, 255, 255, 0.7);
+  --settings-option-selected-shadow: 0 14px 34px rgba(15, 23, 42, 0.12);
+  --settings-option-selected-ring: rgba(255, 255, 255, 0.6);
+  --settings-option-disabled-bg: rgba(255, 255, 255, 0.3);
+  --settings-option-disabled-border: rgba(255, 255, 255, 0.35);
+  --settings-footer-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.62), rgba(247, 249, 255, 0.88));
+  --settings-footer-shadow: 0 -16px 36px rgba(15, 23, 42, 0.08);
+  --settings-footer-button-bg: rgba(255, 255, 255, 0.78);
+  --settings-footer-button-hover-bg: rgba(255, 255, 255, 0.9);
+  --settings-footer-button-shadow: 0 10px 22px rgba(15, 23, 42, 0.08);
+  --settings-handle: rgba(0, 0, 0, 0.12);
+  --settings-usage-track: rgba(0, 0, 0, 0.08);
+  --settings-selected-icon-bg: rgba(255, 255, 255, 0.82);
+  --settings-selected-icon-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+  --settings-panel-border: rgba(255, 255, 255, 0.45);
+  --settings-panel-soft-bg: rgba(255, 255, 255, 0.45);
+}
+
+[data-theme='dark'] {
+  color-scheme: dark;
+
+  --color-background: 15 17 21;
+  --color-surface: 15 17 21;
+  --color-surface-container: 28 31 38;
+  --color-surface-container-low: 22 25 31;
+  --color-surface-container-lowest: 20 22 28;
+  --color-surface-container-high: 38 42 52;
+  --color-primary: 130 177 255;
+  --color-primary-container: 61 133 235;
+  --color-primary-fixed: 30 58 95;
+  --color-outline: 156 162 176;
+  --color-outline-variant: 68 74 88;
+  --color-on-surface: 236 238 242;
+  --color-on-surface-variant: 176 182 196;
+
+  --shadow-ambient: 0 24px 60px rgba(0, 0, 0, 0.45);
+  --shadow-chrome: 0 12px 36px rgba(0, 0, 0, 0.35);
+  --shadow-chrome-scrolled: 0 10px 24px rgba(0, 0, 0, 0.45);
+
+  --settings-sheet-bg: linear-gradient(180deg, rgba(28, 31, 38, 0.94), rgba(20, 22, 28, 0.92));
+  --settings-sheet-shadow: 0 24px 80px rgba(0, 0, 0, 0.55);
+  --settings-section-bg: linear-gradient(180deg, rgba(38, 42, 52, 0.78), rgba(28, 31, 38, 0.62));
+  --settings-section-shadow: 0 10px 28px rgba(0, 0, 0, 0.28);
+  --settings-option-idle-bg: rgba(38, 42, 52, 0.72);
+  --settings-option-idle-border: rgba(255, 255, 255, 0.1);
+  --settings-option-idle-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
+  --settings-option-selected-bg: linear-gradient(180deg, rgba(61, 133, 235, 0.32), rgba(61, 133, 235, 0.18));
+  --settings-option-selected-border: rgba(130, 177, 255, 0.42);
+  --settings-option-selected-shadow: 0 14px 34px rgba(0, 0, 0, 0.35);
+  --settings-option-selected-ring: rgba(130, 177, 255, 0.22);
+  --settings-option-disabled-bg: rgba(38, 42, 52, 0.42);
+  --settings-option-disabled-border: rgba(255, 255, 255, 0.08);
+  --settings-footer-bg: linear-gradient(180deg, rgba(28, 31, 38, 0.78), rgba(20, 22, 28, 0.94));
+  --settings-footer-shadow: 0 -16px 36px rgba(0, 0, 0, 0.35);
+  --settings-footer-button-bg: rgba(38, 42, 52, 0.92);
+  --settings-footer-button-hover-bg: rgba(48, 53, 64, 0.96);
+  --settings-footer-button-shadow: 0 10px 22px rgba(0, 0, 0, 0.3);
+  --settings-handle: rgba(255, 255, 255, 0.18);
+  --settings-usage-track: rgba(255, 255, 255, 0.12);
+  --settings-selected-icon-bg: rgba(20, 22, 28, 0.88);
+  --settings-selected-icon-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  --settings-panel-border: rgba(255, 255, 255, 0.1);
+  --settings-panel-soft-bg: rgba(38, 42, 52, 0.55);
 }
 
 body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
-  background: #f9f9f9;
+  background: rgb(var(--color-background));
+  color: rgb(var(--color-on-surface));
 }
 
 button,
@@ -124,6 +216,127 @@ input {
 
 .viewer-photo-fade {
   transition: opacity 180ms ease-out;
+}
+
+.gallery-chrome-surface {
+  box-shadow: var(--shadow-chrome);
+}
+
+.gallery-chrome-surface-scrolled {
+  box-shadow: var(--shadow-chrome-scrolled);
+}
+
+.settings-selected-icon {
+  background: var(--settings-selected-icon-bg);
+  box-shadow: var(--settings-selected-icon-shadow);
+}
+
+.settings-sheet {
+  background-image: var(--settings-sheet-bg);
+  border-color: var(--settings-panel-border);
+  box-shadow: var(--settings-sheet-shadow);
+}
+
+.settings-section-card {
+  background-image: var(--settings-section-bg);
+  border-color: var(--settings-panel-border);
+  box-shadow: var(--settings-section-shadow);
+}
+
+.settings-option {
+  border-color: var(--settings-option-idle-border);
+  background: var(--settings-option-idle-bg);
+  box-shadow: var(--settings-option-idle-shadow);
+}
+
+.settings-option-selected {
+  border-color: var(--settings-option-selected-border);
+  background-image: var(--settings-option-selected-bg);
+  box-shadow: var(--settings-option-selected-shadow);
+  --tw-ring-color: var(--settings-option-selected-ring);
+}
+
+.settings-option-disabled {
+  border-color: var(--settings-option-disabled-border);
+  background: var(--settings-option-disabled-bg);
+  box-shadow: none;
+}
+
+.settings-handle {
+  background: var(--settings-handle);
+}
+
+.settings-footer {
+  border-color: var(--settings-panel-border);
+  background-image: var(--settings-footer-bg);
+  box-shadow: var(--settings-footer-shadow);
+}
+
+.settings-footer-button {
+  background: var(--settings-footer-button-bg);
+  box-shadow: var(--settings-footer-button-shadow);
+}
+
+.settings-footer-button:hover {
+  background: var(--settings-footer-button-hover-bg);
+}
+
+.settings-soft-panel {
+  border-color: var(--settings-panel-border);
+  background: var(--settings-panel-soft-bg);
+}
+
+.settings-usage-track {
+  background: var(--settings-usage-track);
+}
+
+@media (min-width: 768px) {
+  .settings-sheet {
+    background-image: none;
+    background-color: rgb(var(--color-surface) / 0.95);
+    border-color: transparent;
+  }
+
+  .settings-section-card {
+    background-image: none;
+    background-color: transparent;
+    border-color: transparent;
+    box-shadow: none;
+  }
+
+  .settings-option {
+    border-color: transparent;
+    background: rgb(var(--color-surface-container));
+    box-shadow: none;
+  }
+
+  .settings-option:hover {
+    background: rgb(var(--color-surface-container-high));
+  }
+
+  .settings-option-selected {
+    border-color: rgb(var(--color-primary) / 0.3);
+    background-image: none;
+    background-color: rgb(var(--color-primary) / 0.14);
+    box-shadow: none;
+    --tw-ring-color: rgb(var(--color-primary) / 0.1);
+  }
+
+  .settings-option-disabled {
+    border-color: transparent;
+    background: rgb(var(--color-surface-container-low));
+  }
+
+  .settings-soft-panel {
+    border-color: transparent;
+    background: rgb(var(--color-surface-container));
+    box-shadow: none;
+  }
+
+  .settings-selected-icon {
+    background: rgb(var(--color-primary) / 0.16);
+    box-shadow: none;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
