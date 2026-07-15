@@ -18,23 +18,23 @@ export const enMessages = {
   'settings.theme.dark': 'Dark',
 
   // Exhibition status panels
-  'exhibition.error.title': 'Unable to load the exhibition',
+  'exhibition.error.title': 'Unable to raise the curtain',
   'exhibition.error.description':
-    'Something went wrong while loading works. Check your connection and try again.',
+    'Something went wrong backstage while loading works. Check your connection and try again.',
   'exhibition.error.retry': 'Retry',
   'exhibition.error.openUpload': 'Open upload',
-  'exhibition.empty.title': 'No works yet',
-  'exhibition.empty.description': 'The exhibition is ready. Upload the first images to start the wall.',
-  'exhibition.empty.upload': 'Upload first images',
+  'exhibition.empty.title': 'The stage is empty',
+  'exhibition.empty.description': 'Everything is set for the debut. Upload the first images to open the show.',
+  'exhibition.empty.upload': 'Stage the first images',
 
   // Gallery settings modal
   'settings.title': 'Gallery settings',
   'settings.close': 'Close',
   'settings.closeAria': 'Close gallery settings',
   'settings.closeMobile': 'Close settings',
-  'settings.display': 'Display',
+  'settings.display': 'Production',
   'settings.description':
-    'Choose how many columns the waterfall uses while keeping the presentation stable.',
+    'Set the stage: theme, accent color, and how the wall runs.',
   'settings.sortOrder': 'Sort order',
   'settings.accent': 'Accent color',
   'settings.accent.azure': 'Azure',
@@ -59,11 +59,11 @@ export const enMessages = {
     'Auto still follows the current responsive breakpoints. Use the stepper to switch to a fixed layout.',
 
   // Upload page
-  'upload.backToGallery': 'Back to gallery',
-  'upload.eyebrow': 'Gallery upload',
-  'upload.heading': 'Add images to the gallery',
+  'upload.backToGallery': 'Back to the stage',
+  'upload.eyebrow': 'Production desk',
+  'upload.heading': 'Send new works to the stage',
   'upload.intro':
-    'Drop images here or browse your device. Selected files are published to the gallery media store and then cleared from temporary staging on this server.',
+    'Drop images here or browse your device. New works are published to the gallery media store and then cleared from temporary staging on this server.',
   'upload.dropzone': 'Drop images here or browse',
   'upload.chooseFiles': 'Choose image files',
   'upload.token': 'Upload token',
@@ -72,9 +72,9 @@ export const enMessages = {
   'upload.submit': 'Upload selected files',
   'upload.uploading': 'Uploading…',
   'upload.cancel': 'Cancel upload',
-  'upload.viewGallery': 'View gallery',
+  'upload.viewGallery': 'View the stage',
   'upload.uploadMore': 'Upload more',
-  'upload.complete': 'Upload complete',
+  'upload.complete': 'Live clear!',
   'upload.failed': 'Upload failed',
   'upload.canceled': 'Upload canceled',
   'upload.canceledBody': 'The active upload was canceled before completion.',

@@ -25,7 +25,7 @@ export const ExhibitionHero = memo(function ExhibitionHero({
         ? `${formatWorksLabel(photoCount)} · ${formatMonthsLabel(monthCount)}`
         : formatWorksLabel(photoCount)
       : status === 'loading'
-        ? 'Loading works…'
+        ? 'Setting the stage…'
         : null;
 
   return (

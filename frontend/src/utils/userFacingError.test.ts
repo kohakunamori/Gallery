@@ -73,8 +73,8 @@ describe('userFacingError', () => {
   });
 
   it('exports stable exhibition status panel titles and descriptions', () => {
-    expect(EXHIBITION_STATUS_COPY.error.title).toBe('Unable to load the exhibition');
-    expect(EXHIBITION_STATUS_COPY.empty.title).toBe('No works yet');
+    expect(EXHIBITION_STATUS_COPY.error.title).toBe('Unable to raise the curtain');
+    expect(EXHIBITION_STATUS_COPY.empty.title).toBe('The stage is empty');
     expect(EXHIBITION_STATUS_COPY.empty.description).not.toMatch(/photos-index\.json|\/var\/|stack/i);
     expect(EXHIBITION_STATUS_COPY).not.toHaveProperty('mediaSourceUnavailable');
   });

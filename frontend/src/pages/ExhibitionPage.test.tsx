@@ -684,7 +684,7 @@ describe('ExhibitionPage', () => {
     expect(skeleton).toBeInTheDocument();
     expect(skeleton).toHaveAttribute('data-column-count', '4');
     expect(screen.getAllByTestId('exhibition-skeleton-card').length).toBeGreaterThan(1);
-    expect(screen.getByTestId('exhibition-hero-meta')).toHaveTextContent('Loading works…');
+    expect(screen.getByTestId('exhibition-hero-meta')).toHaveTextContent('Setting the stage…');
     expect(screen.getByLabelText('Loading exhibition')).toHaveAttribute('aria-busy', 'true');
 
     resolvePhotos(photos);
@@ -708,8 +708,8 @@ describe('ExhibitionPage', () => {
     render(<ExhibitionPage />);
 
     expect(await screen.findByTestId('exhibition-status-empty')).toBeInTheDocument();
-    expect(screen.getByText('No works yet')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Upload first images' })).toHaveAttribute('href', '/upload');
+    expect(screen.getByText('The stage is empty')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Stage the first images' })).toHaveAttribute('href', '/upload');
   });
 
   it('shows an error panel with retry that refetches photos', async () => {
@@ -727,7 +727,7 @@ describe('ExhibitionPage', () => {
     render(<ExhibitionPage />);
 
     expect(await screen.findByTestId('exhibition-status-error')).toBeInTheDocument();
-    expect(screen.getByText('Unable to load the exhibition')).toBeInTheDocument();
+    expect(screen.getByText('Unable to raise the curtain')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open upload' })).toHaveAttribute('href', '/upload');
     expect(mockedResetPhotoRequestCache).toHaveBeenCalled();
     const resetsBeforeRetry = mockedResetPhotoRequestCache.mock.calls.length;

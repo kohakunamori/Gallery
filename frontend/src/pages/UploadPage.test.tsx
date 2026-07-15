@@ -104,12 +104,12 @@ describe('UploadPage', () => {
       );
     });
 
-    expect(await screen.findByText('Upload complete')).toBeInTheDocument();
+    expect(await screen.findByText('Live clear!')).toBeInTheDocument();
     expect(screen.getByText(/Published 2 images/i)).toBeInTheDocument();
     expect(screen.getByTestId('upload-success-hint')).toHaveTextContent(
       /New photos appear under Newest sort without a hard reload/i,
     );
-    expect(screen.getByRole('link', { name: /View gallery/i })).toHaveAttribute('href', '/');
+    expect(screen.getByRole('link', { name: /View the stage/i })).toHaveAttribute('href', '/');
     expect(screen.getByRole('button', { name: /Upload more/i })).toBeInTheDocument();
     expect(mockedResetPhotoRequestCache).toHaveBeenCalled();
 
@@ -224,11 +224,11 @@ describe('UploadPage', () => {
 
     await user.upload(screen.getByLabelText(/Choose image files/i), file);
     await user.click(screen.getByRole('button', { name: /Upload selected files/i }));
-    expect(await screen.findByText('Upload complete')).toBeInTheDocument();
+    expect(await screen.findByText('Live clear!')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: /Upload more/i }));
 
-    expect(screen.queryByText('Upload complete')).not.toBeInTheDocument();
+    expect(screen.queryByText('Live clear!')).not.toBeInTheDocument();
     expect(screen.queryByTestId('upload-preview-grid')).not.toBeInTheDocument();
     expect(screen.getByTestId('upload-dropzone')).toBeInTheDocument();
   });
@@ -284,7 +284,7 @@ describe('UploadPage', () => {
     expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuemax', '1');
 
     resolveUpload?.({ files: [], output: ['streamed r2 line'] });
-    expect(await screen.findByText('Upload complete')).toBeInTheDocument();
+    expect(await screen.findByText('Live clear!')).toBeInTheDocument();
   });
 
   it('updates progress as file events arrive during upload', async () => {
@@ -336,7 +336,7 @@ describe('UploadPage', () => {
       });
     });
 
-    expect(await screen.findByText('Upload complete')).toBeInTheDocument();
+    expect(await screen.findByText('Live clear!')).toBeInTheDocument();
   });
 
   it('remembers the upload token on this device when checked', async () => {
@@ -356,7 +356,7 @@ describe('UploadPage', () => {
     await user.upload(screen.getByLabelText(/Choose image files/i), file);
     await user.click(screen.getByRole('button', { name: /Upload selected files/i }));
 
-    expect(await screen.findByText('Upload complete')).toBeInTheDocument();
+    expect(await screen.findByText('Live clear!')).toBeInTheDocument();
     expect(localStorage.getItem('gallery.uploadToken')).toBe('device-token');
 
     unmount();
@@ -470,7 +470,7 @@ describe('UploadPage', () => {
   it('uses calm product copy without internal implementation paths', () => {
     render(<UploadPage />);
 
-    expect(screen.getByRole('heading', { name: /Add images to the gallery/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /Send new works to the stage/i })).toBeInTheDocument();
     expect(screen.getByTestId('upload-dropzone')).toHaveTextContent(/Drop images here or browse/i);
     expect(screen.queryByText(/photos-index\.json/i)).not.toBeInTheDocument();
     expect(document.body.textContent).not.toMatch(/object storage/i);

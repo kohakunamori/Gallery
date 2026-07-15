@@ -39,8 +39,8 @@ describe('i18n getMessage / t', () => {
 
   it('returns English strings for known keys', () => {
     expect(getMessage('settings.title')).toBe('Gallery settings');
-    expect(t('exhibition.error.title')).toBe('Unable to load the exhibition');
-    expect(t('upload.viewGallery')).toBe('View gallery');
+    expect(t('exhibition.error.title')).toBe('Unable to raise the curtain');
+    expect(t('upload.viewGallery')).toBe('View the stage');
   });
 
   it('returns the key itself when missing from every catalog', () => {

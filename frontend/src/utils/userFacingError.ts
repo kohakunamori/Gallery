@@ -15,16 +15,16 @@ export const UPLOAD_NETWORK_ERROR_MESSAGE =
 export const UPLOAD_GENERIC_ERROR_MESSAGE = 'Upload failed. Please try again.';
 
 export const EXHIBITION_GENERIC_ERROR_MESSAGE =
-  'Something went wrong while loading works. Check your connection and try again.';
+  'Something went wrong backstage while loading works. Check your connection and try again.';
 
 export const EXHIBITION_STATUS_COPY = {
   error: {
-    title: 'Unable to load the exhibition',
+    title: 'Unable to raise the curtain',
     description: EXHIBITION_GENERIC_ERROR_MESSAGE,
   },
   empty: {
-    title: 'No works yet',
-    description: 'The exhibition is ready. Upload the first images to start the wall.',
+    title: 'The stage is empty',
+    description: 'Everything is set for the debut. Upload the first images to open the show.',
   },
 } as const;
 
