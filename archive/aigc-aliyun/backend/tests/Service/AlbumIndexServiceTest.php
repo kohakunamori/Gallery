@@ -1,0 +1,265 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Gallery\Tests\Service;
+
+use ArrayObject;
+use Gallery\Service\AlbumIndexService;
+use Gallery\Service\FilePhotoCache;
+use Gallery\Service\MediaSourceAvailabilityService;
+use Gallery\Service\PhotoMetadataReaderInterface;
+use Gallery\Service\PhotoScannerInterface;
+use Gallery\Service\QiniuUsageService;
+use PHPUnit\Framework\TestCase;
+
+final class AlbumIndexServiceTest extends TestCase
+{
+    public function test_it_builds_album_summaries_from_first_level_folders_only(): void
+    {
+        $directory = sys_get_temp_dir() . '/gallery-albums-' . bin2hex(random_bytes(4));
+        mkdir($directory . '/travel', 0777, true);
+        mkdir($directory . '/family', 0777, true);
+
+        $root = $directory . '/root.jpg';
+        $travelOlder = $directory . '/travel/older.jpg';
+        $travelNewest = $directory . '/travel/newest shot.jpg';
+        $familyPhoto = $directory . '/family/pic.jpg';
+
+        file_put_contents($root, 'root');
+        file_put_contents($travelOlder, 'travel-older');
+        file_put_contents($travelNewest, 'travel-newest');
+        file_put_contents($familyPhoto, 'family');
+
+        touch($root, strtotime('2026-03-31 12:00:00 UTC'));
+        touch($travelOlder, strtotime('2026-03-05 10:00:00 UTC'));
+        touch($travelNewest, strtotime('2026-03-01 10:00:00 UTC'));
+        touch($familyPhoto, strtotime('2026-03-10 09:00:00 UTC'));
+
+        $scanner = new class($root, $travelOlder, $travelNewest, $familyPhoto) implements PhotoScannerInterface {
+            public function __construct(
+                private readonly string $root,
+                private readonly string $travelOlder,
+                private readonly string $travelNewest,
+                private readonly string $familyPhoto,
+            ) {
+            }
+
+            public function scan(string $directory): array
+            {
+                return [
+                    [
+                        'absolutePath' => $this->root,
+                        'relativePath' => 'root.jpg',
+                    ],
+                    [
+                        'absolutePath' => $this->familyPhoto,
+                        'relativePath' => 'family/pic.jpg',
+                    ],
+                    [
+                        'absolutePath' => $this->travelOlder,
+                        'relativePath' => 'travel/older.jpg',
+                    ],
+                    [
+                        'absolutePath' => $this->travelNewest,
+                        'relativePath' => 'travel/newest shot.jpg',
+                    ],
+                ];
+            }
+        };
+
+        $metadataReader = new class implements PhotoMetadataReaderInterface {
+            public function read(string $path): array
+            {
+                return match (basename($path)) {
+                    'newest shot.jpg' => ['takenAt' => '2026-03-20T08:00:00+00:00', 'width' => 1200, 'height' => 800],
+                    default => ['takenAt' => null, 'width' => 1200, 'height' => 800],
+                };
+            }
+        };
+
+        $service = new AlbumIndexService($scanner, $metadataReader, $directory, '/media');
+
+        self::assertSame(
+            [
+                [
+                    'id' => 'travel',
+                    'name' => 'travel',
+                    'coverUrl' => '/media/travel/newest%20shot.jpg',
+                    'photoCount' => 2,
+                    'latestSortTime' => '2026-03-20T08:00:00+00:00',
+                ],
+                [
+                    'id' => 'family',
+                    'name' => 'family',
+                    'coverUrl' => '/media/family/pic.jpg',
+                    'photoCount' => 1,
+                    'latestSortTime' => '2026-03-10T09:00:00+00:00',
+                ],
+            ],
+            $service->all(),
+        );
+    }
+
+    public function test_it_skips_a_scanned_album_photo_when_filemtime_fails_after_metadata_is_read(): void
+    {
+        $directory = sys_get_temp_dir() . '/gallery-albums-' . bin2hex(random_bytes(4));
+        mkdir($directory . '/travel', 0777, true);
+
+        $photo = $directory . '/travel/vanishing.jpg';
+        file_put_contents($photo, 'vanishing');
+        touch($photo, strtotime('2026-03-31 12:00:00 UTC'));
+
+        $scanner = new class($photo) implements PhotoScannerInterface {
+            public function __construct(private readonly string $photo)
+            {
+            }
+
+            public function scan(string $directory): array
+            {
+                return [
+                    [
+                        'absolutePath' => $this->photo,
+                        'relativePath' => 'travel/vanishing.jpg',
+                    ],
+                ];
+            }
+        };
+
+        $metadataReader = new class implements PhotoMetadataReaderInterface {
+            public function read(string $path): array
+            {
+                unlink($path);
+
+                return ['takenAt' => null, 'width' => 1200, 'height' => 800];
+            }
+        };
+
+        $service = new AlbumIndexService($scanner, $metadataReader, $directory, '/media');
+
+        self::assertSame([], $service->all());
+    }
+
+    public function test_it_builds_qiniu_album_cover_urls_when_qiniu_is_available(): void
+    {
+        $directory = sys_get_temp_dir() . '/gallery-albums-' . bin2hex(random_bytes(4));
+        mkdir($directory . '/travel', 0777, true);
+
+        $photo = $directory . '/travel/newest shot.jpg';
+        file_put_contents($photo, 'qiniu-album');
+        touch($photo, strtotime('2026-03-31 12:00:00 UTC'));
+
+        $scanner = new class($photo) implements PhotoScannerInterface {
+            public function __construct(private readonly string $photo)
+            {
+            }
+
+            public function scan(string $directory): array
+            {
+                return [
+                    [
+                        'absolutePath' => $this->photo,
+                        'relativePath' => 'travel/newest shot.jpg',
+                    ],
+                ];
+            }
+        };
+
+        $metadataReader = new class implements PhotoMetadataReaderInterface {
+            public function read(string $path): array
+            {
+                return ['takenAt' => null, 'width' => 1200, 'height' => 800];
+            }
+        };
+
+        $qiniuUsageService = new QiniuUsageService(
+            'ak',
+            'sk',
+            'bucket',
+            'cdn.example.com',
+            'api.qiniuapi.com',
+            null,
+            900,
+            10 * 1024 * 1024 * 1024,
+            static fn (string $requestTarget, array $headers): string => json_encode([
+                [
+                    'values' => [
+                        'flow' => 1024,
+                    ],
+                ],
+            ], JSON_THROW_ON_ERROR),
+        );
+        $availabilityService = new MediaSourceAvailabilityService([
+            'r2' => 'https://r2.example.com/gallery',
+            'qiniu' => 'https://qiniu.example.com/gallery',
+            'local' => '/media',
+        ], $qiniuUsageService);
+        $service = new AlbumIndexService(
+            $scanner,
+            $metadataReader,
+            $directory,
+            'https://r2.example.com/gallery',
+            '/media',
+            $availabilityService,
+        );
+
+        $items = $service->all('qiniu');
+
+        self::assertSame('https://qiniu.example.com/gallery/travel/newest%20shot.jpg', $items[0]['coverUrl']);
+    }
+
+    public function test_it_reuses_a_cached_album_index_until_the_ttl_expires(): void
+    {
+        $directory = sys_get_temp_dir() . '/gallery-albums-' . bin2hex(random_bytes(4));
+        $cacheDirectory = sys_get_temp_dir() . '/gallery-album-cache-' . bin2hex(random_bytes(4));
+        mkdir($directory . '/travel', 0777, true);
+        mkdir($cacheDirectory, 0777, true);
+
+        $photo = $directory . '/travel/cached.jpg';
+        file_put_contents($photo, 'cached-album');
+        touch($photo, strtotime('2026-03-31 12:00:00 UTC'));
+
+        $scanCounter = new ArrayObject(['count' => 0]);
+        $scanner = new class($photo, $scanCounter) implements PhotoScannerInterface {
+            public function __construct(
+                private readonly string $photo,
+                private readonly ArrayObject $scanCounter,
+            ) {
+            }
+
+            public function scan(string $directory): array
+            {
+                $this->scanCounter['count']++;
+
+                return [
+                    [
+                        'absolutePath' => $this->photo,
+                        'relativePath' => 'travel/cached.jpg',
+                    ],
+                ];
+            }
+        };
+        $metadataReader = new class implements PhotoMetadataReaderInterface {
+            public function read(string $path): array
+            {
+                return ['takenAt' => null, 'width' => 1200, 'height' => 800];
+            }
+        };
+
+        $service = new AlbumIndexService(
+            $scanner,
+            $metadataReader,
+            $directory,
+            '/media',
+            '/media',
+            null,
+            new FilePhotoCache($cacheDirectory),
+            30,
+        );
+
+        $service->all();
+        $service->all();
+
+        self::assertSame(1, $scanCounter['count']);
+    }
+}
